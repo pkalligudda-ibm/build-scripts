@@ -2,9 +2,6 @@ name: Currency Build V2
 
 on:
   workflow_dispatch:
-    branches:
-      - master
-
     inputs:
       package_name:
         description: 'Name of the package to build'
@@ -24,18 +21,6 @@ on:
         description: 'Build docker image'
         required: true
         default: 'false'
-      enable_trivy:
-        description: 'Enable Trivy scan'
-        required: true
-        default: 'true'
-      enable_syft:
-        description: 'Enable Syft scan'
-        required: true
-        default: 'true'
-      enable_grype:
-        description: 'Enable Grype scan'
-        required: true
-        default: 'true'
       unique_id:
         description: 'Unique ID for the build'
         required: false
@@ -137,6 +122,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build_v2:
     needs: build_info
+    if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le-p10' }}
     env:
       PACKAGE_NAME: ${{ inputs.package_name }}
