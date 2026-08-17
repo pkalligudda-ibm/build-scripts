@@ -1,0 +1,215 @@
+name: Currency Build V2
+
+on:
+  workflow_dispatch:
+    branches:
+      - master
+
+    inputs:
+      package_name:
+        description: 'Name of the package to build'
+        required: true
+      version:
+        description: 'Version of the package'
+        required: true
+      validate_build_script_v2:
+        description: 'Run v2 build script via powercore'
+        required: true
+        default: 'false'
+      wheel_build:
+        description: 'Create wheel for all Python versions via powercore'
+        required: true
+        default: 'false'
+      build_docker:
+        description: 'Build docker image'
+        required: true
+        default: 'false'
+      enable_trivy:
+        description: 'Enable Trivy scan'
+        required: true
+        default: 'true'
+      enable_syft:
+        description: 'Enable Syft scan'
+        required: true
+        default: 'true'
+      enable_grype:
+        description: 'Enable Grype scan'
+        required: true
+        default: 'true'
+      unique_id:
+        description: 'Unique ID for the build'
+        required: false
+        default: 'None'
+      large-runner-label:
+        description: 'Larger runner to use for resource-heavy builds'
+        required: false
+        type: choice
+        options:
+          - ''
+          - ubuntu-24.04-ppc64le-2xlarge-p10
+          - ubuntu-24.04-ppc64le-4xlarge-p10
+
+run-name: >
+  ${{ inputs.large-runner-label != '' &&
+      format('Retriggered Currency Build V2 for package {0} and Unique ID {1} on {2}', inputs.package_name, inputs.unique_id, inputs.large-runner-label) ||
+      format('Currency Build V2 {0} && Unique ID {1}', inputs.package_name, inputs.unique_id)
+  }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # build_info: Reads build_info.json for the package and exports variable.sh
+  # + scanner-env.sh into a package-cache artifact consumed by all downstream
+  # jobs. Identical to the existing Currency Build workflow.
+  # ---------------------------------------------------------------------------
+  build_info:
+    runs-on: ubuntu-24.04-ppc64le-p10
+    env:
+      PACKAGE_NAME: ${{ inputs.package_name }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install system packages
+        run: |
+          sudo apt update -y
+          sudo apt install -y jq file
+
+      - name: Get Build Info and Save Variables
+        run: |
+          chmod +x ./gha-script/readbuild_info.sh
+          bash ./gha-script/readbuild_info.sh
+
+      - name: Show contents of variable.sh
+        run: |
+          echo "===== variable.sh ====="
+          cat variable.sh
+          echo "======================="
+
+      - name: Create scanner-env.sh and package-cache
+        run: |
+          echo "Creating package-cache..."
+          mkdir package-cache
+
+          echo "Creating scanner-env.sh..."
+          echo "export VALIDATE_BUILD_SCRIPT_V2='${{ inputs.validate_build_script_v2 }}'" > scanner-env.sh
+          echo "export BUILD_DOCKER='${{ inputs.build_docker }}'"                         >> scanner-env.sh
+          echo "export PACKAGE_NAME='${{ inputs.package_name }}'"                         >> scanner-env.sh
+
+          echo "===== scanner-env.sh ====="
+          cat scanner-env.sh
+          echo "=========================="
+
+          sudo mv variable.sh package-cache/
+          sudo mv scanner-env.sh package-cache/
+
+      - name: Archive and upload package-cache
+        run: tar -czf package-cache.tar.gz package-cache/
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-cache
+          path: package-cache.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # install_scan_tools: Fetches grype (static binary) and scancode-toolkit
+  # source once and shares them as artifacts for the wheel scan job.
+  # Only runs when wheel_build == true.
+  # ---------------------------------------------------------------------------
+  install_scan_tools:
+    needs: build_info
+    if: ${{ inputs.wheel_build == 'true' }}
+    runs-on: ubuntu-24.04-ppc64le-p10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y wget curl tar jq git
+
+  # ---------------------------------------------------------------------------
+  # build_v2: Downloads powercore wheels from COS, converts the workflow
+  # inputs to a CSV, then invokes powercore to build the package using the
+  # v2 build script. Powercore handles all Python versions internally and
+  # deposits the finished wheels into OUTPUT_DIR (set by the v2 template).
+  # ---------------------------------------------------------------------------
+  build_v2:
+    needs: build_info
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le-p10' }}
+    env:
+      PACKAGE_NAME: ${{ inputs.package_name }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Download package-cache
+        uses: actions/download-artifact@v7
+        with:
+          name: package-cache
+
+      - name: Extract package cache
+        run: tar -xzf package-cache.tar.gz
+
+      - name: Install powercore wheels from COS
+        env:
+          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+        run: |
+          echo "Fetching IAM token..."
+          token_request=$(curl -s -X POST https://iam.cloud.ibm.com/identity/token \
+            -H "content-type: application/x-www-form-urlencoded" \
+            -H "accept: application/json" \
+            -d "grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey&apikey=$GHA_CURRENCY_SERVICE_ID_API_KEY")
+
+          if [[ $(echo "$token_request" | jq -r '.errorCode') != "null" ]]; then
+            echo "ERROR: IAM token request failed. Response: $token_request"
+            exit 1
+          fi
+
+          token=$(echo "$token_request" | jq -r '.access_token')
+          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-production"
+
+          mkdir -p powercore-wheels
+
+          for wheel_prefix in "powercore" "powercore_installer"; do
+            echo "Fetching wheel for prefix: ${wheel_prefix}..."
+            wheel_key=$(curl -s -H "Authorization: bearer $token" \
+              "${BUCKET_URL}?list-type=2&prefix=${wheel_prefix}" \
+              | grep -oP '(?<=<Key>)[^<]*\.whl' | head -1)
+
+            if [[ -z "$wheel_key" ]]; then
+              echo "ERROR: No .whl found in COS for prefix '${wheel_prefix}'"
+              exit 1
+            fi
+
+            echo "Downloading: ${wheel_key}"
+            curl -f -H "Authorization: bearer $token" \
+              -o "powercore-wheels/$(basename "$wheel_key")" \
+              "${BUCKET_URL}/${wheel_key}"
+          done
+
+          echo "Downloaded wheels:"
+          ls -lh powercore-wheels/
+
+          echo "Downloading powercore-config.env..."
+          curl -f -H "Authorization: bearer $token" \
+            -o "powercore-config.env" \
+            "${BUCKET_URL}/powercore-config.env"
+          echo "powercore-config.env contents:"
+          cat powercore-config.env
+
+      - name: Install powercore wheels
+        run: |
+          python3.12 -m pip install --upgrade pip
+          python3.12 -m pip install powercore-wheels/*.whl
+          echo "Installed packages:"
+          python3.12 -m pip list | grep -i powercore
+
+      - name: Convert workflow inputs to build_info.csv
+        env:
+          BUILD_JSON: ${{ toJson(inputs) }}
+        run: |
+          python3.12 - <<'EOF'
+        
