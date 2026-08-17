@@ -123,7 +123,7 @@ jobs:
   # deposits the finished wheels into OUTPUT_DIR (set by the v2 template).
   # ---------------------------------------------------------------------------
   build_v2:
-    needs: build_info
+    needs: install_scan_tools
     if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le-p10' }}
     env:
