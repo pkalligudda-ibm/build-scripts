@@ -24,6 +24,9 @@ on:
         description: 'Unique ID for the build'
         required: false
         default: 'None'
+      powercore_version:
+        description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
+        required: true
       large-runner-label:
         description: 'Larger runner to use for resource-heavy builds'
         required: false
@@ -158,26 +161,38 @@ jobs:
 
           mkdir -p powercore-wheels
 
-          for wheel_prefix in "powercore" "powercore_installer"; do
-            echo "Fetching wheel for prefix: ${wheel_prefix}..."
-            wheel_key=$(curl -s -H "Authorization: bearer $token" \
-              "${BUCKET_URL}?list-type=2&prefix=${wheel_prefix}" \
-              | grep -oP '(?<=<Key>)[^<]*\.whl' | head -1)
+          POWERCORE_VERSION="${{ inputs.powercore_version }}"
+          echo "Targeting powercore wheels version: ${POWERCORE_VERSION}"
 
-            if [[ -z "$wheel_key" ]]; then
-              echo "ERROR: No .whl found in COS for prefix '${wheel_prefix}'"
-              exit 1
-            fi
+          # List all keys under the bucket with prefix "powercore", then keep only
+          # those whose filename version segment starts with POWERCORE_VERSION.
+          # This handles both clean versions (1.0.1) and dev builds (0.3.2.dev481+...).
+          all_keys=$(curl -s -H "Authorization: bearer $token" \
+            "${BUCKET_URL}?list-type=2&prefix=powercore" \
+            | grep -oP '(?<=<Key>)[^<]*\.whl')
 
+          matched_keys=$(echo "$all_keys" | grep -E "powercore[^-]*-${POWERCORE_VERSION}" || true)
+
+          if [[ -z "$matched_keys" ]]; then
+            echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
+            echo "Available wheels:"
+            echo "$all_keys"
+            exit 1
+          fi
+
+          echo "Matched wheels for version ${POWERCORE_VERSION}:"
+          echo "$matched_keys"
+
+          while IFS= read -r wheel_key; do
+            [[ -z "$wheel_key" ]] && continue
             echo "Downloading: ${wheel_key}"
             curl -f -H "Authorization: bearer $token" \
               -o "powercore-wheels/$(basename "$wheel_key")" \
               "${BUCKET_URL}/${wheel_key}"
-          done
+          done <<< "$matched_keys"
 
           echo "Downloaded wheels:"
           ls -lh powercore-wheels/
-
           echo "Downloading powercore-config.env..."
           curl -f -H "Authorization: bearer $token" \
             -o "powercore-config.env" \
@@ -188,13 +203,23 @@ jobs:
       - name: Install powercore wheels
         run: |
           python3.12 -m pip install --upgrade pip
-          python3.12 -m pip install powercore-wheels/*.whl
+          # Step 1: Install powercore_installer first, then run it with the config
+          # to set up the powercore environment before the remaining wheels are installed
+          installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl | head -1)
+          if [[ -z "$installer_wheel" ]]; then
+            echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
+            exit 1
+          fi
+          echo "Installing powercore_installer from: ${installer_wheel}"
+          python3.12 -m pip install "$installer_wheel"
+          python3.12 -m powercore_installer -c powercore-config.env -y
+
+          # Step 2: Install the remaining powercore wheels via pip
+          other_wheels=$(ls powercore-wheels/*.whl | grep -v "powercore_installer")
+          if [[ -n "$other_wheels" ]]; then
+            echo "Installing remaining powercore wheels..."
+            python3.12 -m pip install $other_wheels
+          fi
           echo "Installed packages:"
           python3.12 -m pip list | grep -i powercore
-
-      - name: Convert workflow inputs to build_info.csv
-        env:
-          BUILD_JSON: ${{ toJson(inputs) }}
-        run: |
-          python3.12 - <<'EOF'
         
