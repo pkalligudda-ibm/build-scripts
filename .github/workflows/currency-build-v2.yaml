@@ -241,27 +241,25 @@ jobs:
 
       - name: Install powercore wheels
         run: |
-          # pip cannot write to system site-packages on this runner so it falls
-          # back to --user (~/.local). Prepend ~/.local/bin to PATH now so the
-          # console-script entry points are immediately callable in this step,
-          # and persist that addition to all subsequent steps via GITHUB_PATH.
-          export PATH="$HOME/.local/bin:$PATH"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
           python3.12 -m pip install --upgrade pip --user --quiet
 
-          # Install all powercore wheels with a single pip call.
-          # powercore-install (automated-powercore-setup.sh) is a full VM-setup
-          # script that creates system users, installs Docker, and configures
-          # systemd — none of which is needed or possible in CI.
-          mapfile -t all_wheels < <(ls powercore-wheels/*.whl 2>/dev/null)
-          if [[ ${#all_wheels[@]} -eq 0 ]]; then
-            echo "ERROR: no wheels found in powercore-wheels/"
+          # Step 1: install the powercore_installer wheel as root so that the
+          # powercore-install console script lands in /usr/local/bin and can be
+          # called with sudo in the next step.
+          installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
+          if [[ -z "$installer_wheel" ]]; then
+            echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
             exit 1
           fi
-          echo "Installing ${#all_wheels[@]} powercore wheels..."
-          python3.12 -m pip install --user "${all_wheels[@]}"
+          echo "Installing powercore_installer from: ${installer_wheel}"
+          sudo python3.12 -m pip install "$installer_wheel" --force-reinstall
 
           echo "Installed packages:"
           python3.12 -m pip list | grep -i powercore
+
+      - name: Run powercore-install
+        run: |
+          sudo powercore-install \
+            --config "$(pwd)/powercore-config.env" \
+            --non-interactive
         
