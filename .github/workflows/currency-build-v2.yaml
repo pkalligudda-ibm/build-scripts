@@ -106,7 +106,7 @@ jobs:
   install_scan_tools:
     needs: build_info
     if: ${{ inputs.wheel_build == 'true' }}
-    runs-on: ubuntu-24.04-ppc64le-p10
+    runs-on: ubuntu-24.04-ppc64le
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -125,7 +125,7 @@ jobs:
   build_v2:
     needs: install_scan_tools
     if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' }}
-    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le-p10' }}
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PACKAGE_NAME: ${{ inputs.package_name }}
       VERSION: ${{ inputs.version }}
