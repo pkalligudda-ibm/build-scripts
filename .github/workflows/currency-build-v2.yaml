@@ -165,7 +165,7 @@ jobs:
             exit 1
           fi
 
-          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
+          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-production"
           LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
 
           mkdir -p powercore-wheels
@@ -187,7 +187,7 @@ jobs:
             exit 1
           fi
 
-          all_keys=$(echo "$list_response" | sed -n 's:.*<Key>\([^<]*\.whl\)</Key>.*:\1:p')
+          all_keys=$(printf '%s' "$list_response" | tr '<' '\n' | sed -n 's:^Key>\([^<]*\.whl\)$:\1:p')
 
           if [[ -z "$all_keys" ]]; then
             echo "ERROR: No wheel files were found in COS list response."
@@ -196,7 +196,10 @@ jobs:
             exit 1
           fi
 
-          matched_keys=$(echo "$all_keys" | grep -E "powercore[^-]*-${POWERCORE_VERSION}" || true)
+          echo "Available wheel keys:"
+          echo "$all_keys"
+
+          matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
 
           if [[ -z "$matched_keys" ]]; then
             echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
