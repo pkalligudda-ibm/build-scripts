@@ -165,7 +165,7 @@ jobs:
             exit 1
           fi
 
-          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-production"
+          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
           LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
 
           mkdir -p powercore-wheels
