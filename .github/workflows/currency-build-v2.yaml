@@ -257,6 +257,12 @@ jobs:
           echo "Installed packages:"
           python3.12 -m pip list | grep -i powercore
 
+      - name: Install IBM Cloud CLI
+        run: |
+          curl -fsSL https://clis.cloud.ibm.com/install/linux | sudo sh
+          ibmcloud plugin install cloud-object-storage -f
+          ibmcloud plugin install container-registry -f
+
       - name: Run powercore-install
         run: |
           sudo powercore-install \
