@@ -49,7 +49,7 @@ jobs:
   # jobs. Identical to the existing Currency Build workflow.
   # ---------------------------------------------------------------------------
   build_info:
-    runs-on: ubuntu-24.04-ppc64le
+    runs-on: ubuntu-24.04-ppc64le-p10
     env:
       PACKAGE_NAME: ${{ inputs.package_name }}
       VERSION: ${{ inputs.version }}
