@@ -67,8 +67,8 @@ jobs:
           ls -la
           echo "============"
           pwd
-          chmod +x ./gha-script/readbuild_info.sh
-          bash ./gha-script/readbuild_info.sh
+          chmod +x gha-script/readbuild_info.sh
+          bash gha-script/readbuild_info.sh
 
       - name: Show contents of variable.sh
         run: |
