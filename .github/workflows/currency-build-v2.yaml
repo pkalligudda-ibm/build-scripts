@@ -241,37 +241,26 @@ jobs:
 
       - name: Install powercore wheels
         run: |
-          # pip cannot write to system site-packages on this runner, so it falls
-          # back to a --user install (~/.local). Add ~/.local/bin to PATH so the
-          # console-script entry points installed by pip are immediately available.
+          # pip cannot write to system site-packages on this runner so it falls
+          # back to --user (~/.local). Prepend ~/.local/bin to PATH now so the
+          # console-script entry points are immediately callable in this step,
+          # and persist that addition to all subsequent steps via GITHUB_PATH.
           export PATH="$HOME/.local/bin:$PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
           python3.12 -m pip install --upgrade pip --user --quiet
 
-          # Step 1: install the powercore_installer wheel and invoke its entry point.
-          # The package installs as the namespace sub-package powercore.installer —
-          # `python3.12 -m powercore_installer` is wrong (no such top-level module).
-          # pip registers the console script `powercore-install` via pyproject.toml:
-          #   powercore-install = "powercore.installer.cli:install"
-          # With ~/.local/bin on PATH that script is now directly callable.
-          installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
-          if [[ -z "$installer_wheel" ]]; then
-            echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
+          # Install all powercore wheels with a single pip call.
+          # powercore-install (automated-powercore-setup.sh) is a full VM-setup
+          # script that creates system users, installs Docker, and configures
+          # systemd — none of which is needed or possible in CI.
+          mapfile -t all_wheels < <(ls powercore-wheels/*.whl 2>/dev/null)
+          if [[ ${#all_wheels[@]} -eq 0 ]]; then
+            echo "ERROR: no wheels found in powercore-wheels/"
             exit 1
           fi
-          echo "Installing powercore_installer from: ${installer_wheel}"
-          python3.12 -m pip install --user "$installer_wheel"
-          powercore-install -c powercore-config.env -y
-
-          # Step 2: install the remaining powercore wheels.
-          # mapfile keeps the list as a proper array — avoids word-splitting on
-          # the unquoted string used in the original.
-          mapfile -t other_wheels < <(ls powercore-wheels/*.whl 2>/dev/null | grep -v "powercore_installer")
-          if [[ ${#other_wheels[@]} -gt 0 ]]; then
-            echo "Installing remaining powercore wheels..."
-            python3.12 -m pip install --user "${other_wheels[@]}"
-          fi
+          echo "Installing ${#all_wheels[@]} powercore wheels..."
+          python3.12 -m pip install --user "${all_wheels[@]}"
 
           echo "Installed packages:"
           python3.12 -m pip list | grep -i powercore
