@@ -265,14 +265,6 @@ jobs:
 
       - name: Run powercore-install
         run: |
-          # Pre-create the runtime lib/bin directories with open permissions so
-          # pip's --prefix write succeeds when install-wheels-integrated.sh runs
-          # as the powercore user.
-          sudo mkdir -p /home/powercore/powercore/runtime/lib
-          sudo mkdir -p /home/powercore/powercore/runtime/bin
-          sudo chmod -R 777 /home/powercore/powercore/runtime/lib
-          sudo chmod -R 777 /home/powercore/powercore/runtime/bin
-
           sudo powercore-install \
             --config "$(pwd)/powercore-config.env" \
             --non-interactive
