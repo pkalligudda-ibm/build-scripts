@@ -279,6 +279,8 @@ jobs:
             DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${POWERCORE_UID}/bus \
             bash -c '
               sleep 30
+              echo "Starting powercore-workflow.target..."
+              systemctl --user start powercore-workflow.target
               echo "Checking systemd --user status for powercore-workflow.target..."
               systemctl --user status powercore-workflow.target
             '
