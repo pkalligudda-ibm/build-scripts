@@ -268,4 +268,18 @@ jobs:
           sudo powercore-install \
             --config "$(pwd)/powercore-config.env" \
             --non-interactive
+
+      - name: Switch to powercore user and verify systemd target
+        run: |
+          POWERCORE_UID=$(id -u powercore)
+
+          echo "Switching to powercore user, sleeping 30 seconds, then checking systemd status..."
+          sudo -u powercore \
+            XDG_RUNTIME_DIR=/run/user/${POWERCORE_UID} \
+            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${POWERCORE_UID}/bus \
+            bash -c '
+              sleep 30
+              echo "Checking systemd --user status for powercore-workflow.target..."
+              systemctl --user status powercore-workflow.target
+            '
         
