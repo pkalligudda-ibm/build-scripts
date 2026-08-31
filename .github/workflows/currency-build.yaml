@@ -76,7 +76,7 @@ jobs:
       script_ubi10: ${{ steps.emit.outputs.script_ubi10 }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install system packages
         run: |
@@ -142,15 +142,16 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # install_scan_tools: installs grype + fetches scancode-toolkit source ONCE.
-  # Skipped entirely when wheel_build=false.
+  # Runs when wheel_build=true (scancode needed for wheels) OR enable_grype=true
+  # (grype needed for source/image scanners).
   # ---------------------------------------------------------------------------
   install_scan_tools:
     needs: build_info
-    if: ${{ inputs.wheel_build == 'true' }}
+    if: ${{ inputs.wheel_build == 'true' || inputs.enable_grype == 'true' }}
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -212,7 +213,7 @@ jobs:
       BUILD_SCRIPT: ${{ fromJson(needs.build_info.outputs.script_ubi8).script }}
       TESTED_ON:    ${{ fromJson(needs.build_info.outputs.script_ubi8).tested_on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -223,6 +224,7 @@ jobs:
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
         run: |
+          sudo chown -R $USER:$USER .
           source package-cache/variable.sh
           source package-cache/scanner-env.sh
           export BUILD_SCRIPT="${{ fromJson(needs.build_info.outputs.script_ubi8).script }}"
@@ -234,8 +236,9 @@ jobs:
           bash ./gha-script/build_package.sh
           cloned_package=$(ls -td -- */ | head -n 1)
           sudo mv "$cloned_package" package-cache/
-          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> package-cache/scanner-env.sh
-          cd package-cache && sudo chown $USER:$USER -R .
+          sudo chown -R $USER:$USER .
+          cd package-cache
+          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> scanner-env.sh
           chmod +x ../gha-script/pre_process.sh
           bash ../gha-script/pre_process.sh
           cd $GITHUB_WORKSPACE
@@ -260,7 +263,7 @@ jobs:
       BUILD_SCRIPT: ${{ fromJson(needs.build_info.outputs.script_ubi9).script }}
       TESTED_ON:    ${{ fromJson(needs.build_info.outputs.script_ubi9).tested_on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -271,6 +274,7 @@ jobs:
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
         run: |
+          sudo chown -R $USER:$USER .
           source package-cache/variable.sh
           source package-cache/scanner-env.sh
           export BUILD_SCRIPT="${{ fromJson(needs.build_info.outputs.script_ubi9).script }}"
@@ -282,8 +286,9 @@ jobs:
           bash ./gha-script/build_package.sh
           cloned_package=$(ls -td -- */ | head -n 1)
           sudo mv "$cloned_package" package-cache/
-          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> package-cache/scanner-env.sh
-          cd package-cache && sudo chown $USER:$USER -R .
+          sudo chown -R $USER:$USER .
+          cd package-cache
+          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> scanner-env.sh
           chmod +x ../gha-script/pre_process.sh
           bash ../gha-script/pre_process.sh
           cd $GITHUB_WORKSPACE
@@ -308,7 +313,7 @@ jobs:
       BUILD_SCRIPT: ${{ fromJson(needs.build_info.outputs.script_ubi10).script }}
       TESTED_ON:    ${{ fromJson(needs.build_info.outputs.script_ubi10).tested_on }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -319,6 +324,7 @@ jobs:
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
         run: |
+          sudo chown -R $USER:$USER .
           source package-cache/variable.sh
           source package-cache/scanner-env.sh
           export BUILD_SCRIPT="${{ fromJson(needs.build_info.outputs.script_ubi10).script }}"
@@ -330,8 +336,9 @@ jobs:
           bash ./gha-script/build_package.sh
           cloned_package=$(ls -td -- */ | head -n 1)
           sudo mv "$cloned_package" package-cache/
-          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> package-cache/scanner-env.sh
-          cd package-cache && sudo chown $USER:$USER -R .
+          sudo chown -R $USER:$USER .
+          cd package-cache
+          echo "export CLONED_PACKAGE=\"$cloned_package\"" >> scanner-env.sh
           chmod +x ../gha-script/pre_process.sh
           bash ../gha-script/pre_process.sh
           cd $GITHUB_WORKSPACE
@@ -368,7 +375,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -458,7 +465,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -548,7 +555,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -632,7 +639,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -716,7 +723,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -801,7 +808,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -886,7 +893,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -972,7 +979,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -1057,7 +1064,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -1142,7 +1149,7 @@ jobs:
       GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
       GHA_CURRENCY_SERVICE_ID:         ${{ secrets.GHA_CURRENCY_SERVICE_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Install system dependencies
@@ -1231,7 +1238,7 @@ jobs:
        needs.wheel_build_ubi8_py312.result == 'success')
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -1281,7 +1288,7 @@ jobs:
        needs.wheel_build_ubi9_py314.result == 'success')
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -1327,7 +1334,7 @@ jobs:
        needs.wheel_build_ubi10_py314.result == 'success')
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -1365,11 +1372,11 @@ jobs:
   # Only runs when the corresponding build_ubiN succeeded and has a script.
   # ---------------------------------------------------------------------------
   source_scanner_ubi8:
-    needs: build_ubi8
+    needs: [build_ubi8, install_scan_tools]
     if: ${{ always() && inputs.validate_build_script == 'true' && needs.build_ubi8.result == 'success' }}
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download updated package-cache (UBI8)
         uses: actions/download-artifact@v4
         with:
@@ -1430,11 +1437,11 @@ jobs:
           bash ./gha-script/upload-scripts/upload_file.sh source_scanner_ubi8.tar.gz
 
   source_scanner_ubi9:
-    needs: build_ubi9
+    needs: [build_ubi9, install_scan_tools]
     if: ${{ always() && inputs.validate_build_script == 'true' && needs.build_ubi9.result == 'success' }}
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download updated package-cache (UBI9)
         uses: actions/download-artifact@v4
         with:
@@ -1495,11 +1502,11 @@ jobs:
           bash ./gha-script/upload-scripts/upload_file.sh source_scanner_ubi9.tar.gz
 
   source_scanner_ubi10:
-    needs: build_ubi10
+    needs: [build_ubi10, install_scan_tools]
     if: ${{ always() && inputs.validate_build_script == 'true' && needs.build_ubi10.result == 'success' }}
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download updated package-cache (UBI10)
         uses: actions/download-artifact@v4
         with:
@@ -1567,7 +1574,7 @@ jobs:
     if: ${{ inputs.build_docker == 'true' }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le-p10' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -1603,7 +1610,7 @@ jobs:
     if: ${{ inputs.build_docker == 'true' }}
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
@@ -1684,7 +1691,7 @@ jobs:
        needs.build_ubi10.result == 'success')
     runs-on: ubuntu-24.04-ppc64le-p10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download package-cache
         uses: actions/download-artifact@v4
         with:
