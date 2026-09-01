@@ -67,8 +67,8 @@ jobs:
 
       - name: Parse package_json and write variable.sh
         run: |
-          chmod +x ./gha-scripts/parse-package-json.sh
-          bash ./gha-scripts/parse-package-json.sh \
+          chmod +x ./gha-script/parse-package-json.sh
+          bash ./gha-script/parse-package-json.sh \
             '${{ inputs.package_json }}' \
             '${{ inputs.validate_build_script_v2 }}' \
             '${{ inputs.wheel_build }}' \
@@ -119,15 +119,15 @@ jobs:
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
         run: |
-          chmod +x ./gha-scripts/download-wheels.sh
-          bash ./gha-scripts/download-wheels.sh \
+          chmod +x ./gha-script/download-wheels.sh
+          bash ./gha-script/download-wheels.sh \
             "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             "$POWERCORE_VERSION"
 
       - name: Install PowerCore wheels
         run: |
-          chmod +x ./gha-scripts/install-powercore.sh
-          bash ./gha-scripts/install-powercore.sh "$(pwd)/powercore-config.env"
+          chmod +x ./gha-script/install-powercore.sh
+          bash ./gha-script/install-powercore.sh "$(pwd)/powercore-config.env"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -141,19 +141,19 @@ jobs:
 
       - name: Create PowerCore queue directories
         run: |
-          chmod +x ./gha-scripts/setup-queues.sh
-          bash ./gha-scripts/setup-queues.sh
+          chmod +x ./gha-script/setup-queues.sh
+          bash ./gha-script/setup-queues.sh
 
       - name: Start PowerCore workers
         run: |
-          chmod +x ./gha-scripts/start-workers.sh
-          bash ./gha-scripts/start-workers.sh
+          chmod +x ./gha-script/start-workers.sh
+          bash ./gha-script/start-workers.sh
 
       - name: Drop CSV into PowerCore inbox
         id: drop_csv
         run: |
-          chmod +x ./gha-scripts/drop-csv.sh
-          bash ./gha-scripts/drop-csv.sh \
+          chmod +x ./gha-script/drop-csv.sh
+          bash ./gha-script/drop-csv.sh \
             "$POWERCORE_RUNTIME" \
             "${{ github.run_id }}" \
             "$PACKAGE_NAME" \
@@ -165,8 +165,8 @@ jobs:
       - name: Wait for PowerCore pipeline to complete
         timeout-minutes: 180
         run: |
-          chmod +x ./gha-scripts/poll-pipeline.sh
-          bash ./gha-scripts/poll-pipeline.sh \
+          chmod +x ./gha-script/poll-pipeline.sh
+          bash ./gha-script/poll-pipeline.sh \
             "${{ steps.drop_csv.outputs.powercore_runtime }}" \
             "${{ steps.drop_csv.outputs.csv_name }}" \
             "$PACKAGE_NAME"
