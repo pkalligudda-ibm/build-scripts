@@ -290,6 +290,25 @@ jobs:
             --config "$(pwd)/powercore-config.env" \
             --non-interactive
 
+      - name: Create PowerCore queue directories
+        run: |
+          POWERCORE_RUNTIME="$(sudo -u powercore bash -c 'echo $HOME')/.local/share/powercore/runtime"
+
+          # powercore-install calls deploy-workflow.sh via $SCRIPT_DIR/01-Prepare/
+          # which does not exist in the GHA runner context, so queues are never
+          # created by the installer. Create them explicitly here as powercore user.
+          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/inbox"
+            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/outbox"
+            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/processing"
+            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/failed"
+          done
+          sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/requests"
+          sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/incoming"
+
+          echo "✅ Queue directories created:"
+          sudo -u powercore find "${POWERCORE_RUNTIME}/queues" -type d | sort
+
       - name: Switch to powercore user and verify systemd target
         run: |
           POWERCORE_UID=$(id -u powercore)
