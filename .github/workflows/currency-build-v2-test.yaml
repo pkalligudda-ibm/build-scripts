@@ -313,6 +313,8 @@ jobs:
           # in /usr/local/bin (system-wide pip install) or in the powercore
           # user's local bin (~/.local/bin) depending on how the wheels were
           # installed. Check both and fail early if neither is found.
+          # Use || true so a non-zero exit from the subshell doesn't abort the
+          # step under bash's implicit -e before the guard below can run.
           WORKER_BIN=$(sudo -u powercore bash -c '
             for candidate in \
               /usr/local/bin/powercore-worker \
@@ -323,8 +325,7 @@ jobs:
                 exit 0
               fi
             done
-            exit 1
-          ')
+          ' || true)
           if [[ -z "$WORKER_BIN" ]]; then
             echo "❌ powercore-worker binary not found. Searched:"
             echo "     /usr/local/bin/powercore-worker"
