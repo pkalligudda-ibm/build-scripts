@@ -278,12 +278,6 @@ jobs:
           echo "Installed packages:"
           python3.12 -m pip list | grep -i powercore
 
-      - name: Install IBM Cloud CLI
-        run: |
-          curl -fsSL https://clis.cloud.ibm.com/install/linux | sudo sh
-          ibmcloud plugin install cloud-object-storage -f
-          ibmcloud plugin install container-registry -f
-
       - name: Run powercore-install
         run: |
           sudo powercore-install \
@@ -309,21 +303,91 @@ jobs:
           echo "✅ Queue directories created:"
           sudo -u powercore find "${POWERCORE_RUNTIME}/queues" -type d | sort
 
-      - name: Switch to powercore user and verify systemd target
+      - name: Start and verify PowerCore systemd workers
         run: |
           POWERCORE_UID=$(id -u powercore)
+          XDG_RUNTIME_DIR="/run/user/${POWERCORE_UID}"
+          DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
 
-          echo "Switching to powercore user, sleeping 30 seconds, then checking systemd status..."
+          # The service unit's WorkingDirectory and ExecStart reference
+          # %h/runtime/bin/powercore-worker which does not exist in GHA —
+          # powercore-install puts the binary in /usr/local/bin instead.
+          # Override both so systemd can actually launch the workers.
+          SYSTEMD_USER_DIR="/home/powercore/.config/systemd/user"
+          sudo -u powercore mkdir -p "${SYSTEMD_USER_DIR}"
+
+          # Write the corrected unit file with printf so all content stays
+          # within the YAML indentation. ExecStart points to /usr/local/bin
+          # where powercore-install places the binary; WorkingDirectory is the
+          # powercore home dir (runtime/bin does not exist in GHA context).
+          UNIT_FILE="${SYSTEMD_USER_DIR}/powercore-worker@.service"
+          printf '%s\n' \
+            '[Unit]' \
+            'Description=PowerCore Worker %i (User Service)' \
+            'After=network.target' \
+            'PartOf=powercore-workflow.target' \
+            '' \
+            '[Service]' \
+            'Type=simple' \
+            'WorkingDirectory=/home/powercore' \
+            'Environment=POWERCORE_RUNTIME=/home/powercore/.local/share/powercore/runtime' \
+            'Environment=BULKSEARCH_RUNTIME=/home/powercore/.local/share/powercore/runtime' \
+            'Environment=POWERCORE_POLL_INTERVAL=30' \
+            'Environment=POWERCORE_MAX_OUTBOX_ITEMS=5' \
+            'Environment=POWERCORE_MIN_DISK_SPACE_GB=10' \
+            'EnvironmentFile=-/home/powercore/.local/share/powercore/runtime/config/systemd.env' \
+            'ExecStart=/usr/local/bin/powercore-worker %i' \
+            'Restart=always' \
+            'RestartSec=10' \
+            '' \
+            '[Install]' \
+            'WantedBy=default.target' \
+            | sudo -u powercore tee "${UNIT_FILE}" > /dev/null
+          echo "✅ Unit file written: ${UNIT_FILE}"
+          sudo -u powercore cat "${UNIT_FILE}"
+
+          # Reload daemon so the updated unit is picked up
           sudo -u powercore \
-            XDG_RUNTIME_DIR=/run/user/${POWERCORE_UID} \
-            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${POWERCORE_UID}/bus \
-            bash -c '
-              sleep 30
-              echo "Starting powercore-workflow.target..."
-              systemctl --user start powercore-workflow.target
-              echo "Checking systemd --user status for powercore-workflow.target..."
-              systemctl --user status powercore-workflow.target
-            '
+            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+            systemctl --user daemon-reload
+
+          # Start the workflow target (which starts all stage workers via Wants=)
+          sudo -u powercore \
+            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+            systemctl --user start powercore-workflow.target
+
+          # Give workers a moment to start
+          sleep 5
+
+          # Verify each worker is actually running — fail the step if any are not
+          ALL_OK=true
+          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+            STATUS=$(sudo -u powercore \
+              XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+              DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+              systemctl --user is-active "powercore-worker@${stage}.service" 2>/dev/null || true)
+            if [ "$STATUS" = "active" ]; then
+              echo "✅ powercore-worker@${stage}: active"
+            else
+              echo "❌ powercore-worker@${stage}: ${STATUS}"
+              sudo -u powercore \
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+                DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+                systemctl --user status "powercore-worker@${stage}.service" --no-pager || true
+              ALL_OK=false
+            fi
+          done
+
+          if [ "$ALL_OK" = "false" ]; then
+            echo ""
+            echo "❌ One or more workers failed to start. Aborting."
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All PowerCore workers running"
 
       # -----------------------------------------------------------------------
       # Convert the JSON input to a CSV file and drop it into the PowerCore
