@@ -619,9 +619,13 @@ jobs:
 
           # Find the BRequest directory anywhere in the pipeline and return
           # its path relative to POWERCORE_RUNTIME, e.g.:
-          #   queues/04-shallow-scan/processing/BRequest_20260901_brotlipy_a1b2c3d4
-          #   requests/BRequest_20260901_brotlipy_a1b2c3d4
+          #   queues/04-shallow-scan/processing/BRequest_20260901_brotlipy-123_a1b2c3d4
+          #   requests/BRequest_20260901_brotlipy-123_a1b2c3d4
           # Returns empty string if not found (mid-transition between dirs).
+          #
+          # NOTE: $BREQUEST must already be set before calling this function.
+          # The name is looked up by exact match so there are no false positives
+          # even when multiple jobs run concurrently.
           _find_brequest() {
             # 1. Terminal: bookkeeping completed → runtime/requests/
             if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
@@ -700,13 +704,28 @@ jobs:
           # What happens (worker.py + adapters/preprocess.py):
           #   1. Worker picks up CSV from queues/03-preprocess/inbox/
           #      → renames it to queues/03-preprocess/processing/
-          #   2. preprocess_main() runs and creates BRequest_* dir in runtime/input/
-          #   3. _complete_item() renames it into queues/04-shallow-scan/inbox/
+          #   2. preprocess_main() runs:
+          #      - generate_task_id() uses CSV stem as part of the name:
+          #          BRequest_{date}_{csv_stem}_{uuid8}
+          #          e.g. BRequest_20260901_brotlipy-33516010027_a1b2c3d4
+          #      - Creates the BRequest dir at runtime_config.input_dir
+          #        which resolves to $POWERCORE_RUNTIME/input/ by default,
+          #        BUT if POWERCORE_RUNTIME env var is set to the runtime root,
+          #        the dir may appear directly under $POWERCORE_RUNTIME/.
+          #   3. _complete_item() renames BRequest → queues/04-shallow-scan/inbox/
           #
-          # Therefore we watch for BRequest_* inside queues/ (stages 04+)
-          # AND inside runtime/input/ (transient — created before _complete_item runs).
+          # Search strategy (no package-name filter — BRequest name comes from
+          # CSV stem, not package name):
+          #   1. runtime/input/   — default POWERCORE_INPUT path
+          #   2. runtime/ root    — fallback if POWERCORE_INPUT == POWERCORE_RUNTIME
+          #   3. queues/04+/      — already handed off before we poll
           # ─────────────────────────────────────────────────────────────────────
+          # Derive the expected CSV stem (sanitized the same way generate_task_id does)
+          CSV_STEM="${CSV_NAME%.csv}"
+          CSV_STEM_SAFE=$(echo "${CSV_STEM}" | tr -c 'a-zA-Z0-9_-' '_')
+
           echo "── Phase 1: waiting for 03-preprocess to consume CSV and create BRequest ──"
+          echo "   Watching for BRequest_*${CSV_STEM_SAFE}* or any BRequest_* in runtime paths"
 
           while [ -z "$BREQUEST" ]; do
 
@@ -717,22 +736,31 @@ jobs:
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/" 2>/dev/null || true
               echo "── 03-preprocess processing ──"
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/" 2>/dev/null || true
-              echo "── runtime/input (where BRequest is created) ──"
+              echo "── runtime/input/ (default POWERCORE_INPUT location) ──"
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/input/" 2>/dev/null || true
+              echo "── runtime/ root (fallback BRequest location) ──"
+              sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null || true
               _worker_journal "03-preprocess"
               _dump_workflow_log
               exit 1
             fi
 
-            # Search both runtime/input/ (creation point) and queues/04+/inbox/
-            # (destination after _complete_item). -maxdepth 1 for input/ is enough
-            # because BRequest is created directly inside it.
+            # Search all three possible BRequest creation locations.
+            # No package-name filter: BRequest name = BRequest_{date}_{csv_stem}_{uuid8}
+            # where csv_stem comes from the CSV filename, not the package name.
             FOUND=$(
               {
+                # 1. Default: runtime/input/  (POWERCORE_INPUT default)
                 sudo -u powercore find "${POWERCORE_RUNTIME}/input/" \
-                  -maxdepth 1 -type d -name "BRequest_*${PKG_NAME}*" 2>/dev/null
+                  -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
+                # 2. Runtime root fallback: BRequest created directly under runtime/
+                #    (happens when POWERCORE_RUNTIME env is set to the runtime root
+                #     and POWERCORE_INPUT is not separately configured)
+                sudo -u powercore find "${POWERCORE_RUNTIME}" \
+                  -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
+                # 3. Already in queues: handed off to 04-shallow-scan before we polled
                 sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-                  -mindepth 3 -maxdepth 3 -type d -name "BRequest_*${PKG_NAME}*" 2>/dev/null
+                  -mindepth 3 -maxdepth 3 -type d -name "BRequest_*" 2>/dev/null
               } | head -1
             )
 
