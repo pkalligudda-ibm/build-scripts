@@ -621,6 +621,7 @@ jobs:
           # Returns the BRequest path relative to POWERCORE_RUNTIME.
           # Searches: requests/ (done), then queues/ (in-flight).
           _find_brequest() {
+            [ -z "${BREQUEST}" ] && return
             if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
               echo "requests/${BREQUEST}"; return
             fi
@@ -685,48 +686,79 @@ jobs:
             echo "============================================================"
           }
 
+          # ── _json_field ──────────────────────────────────────────────────────
+          # Extract a numeric or string value from a flat JSON file using grep+awk.
+          # Usage: _json_field <file> <key>   → prints the raw value (no quotes)
+          # Works for: "key": 123  and  "key": "string"
+          _json_field() {
+            sudo -u powercore grep -o "\"$2\"[[:space:]]*:[[:space:]]*[^,}]*" "$1" \
+              2>/dev/null | head -1 | awk -F': ' '{gsub(/[",[:space:]]/,"",$2); print $2}' \
+              || true
+          }
+
           # ── _print_shallow_summary ───────────────────────────────────────────
-          # Reads shallow_scan_metadata.json (written by shallow_scan.py:300-354)
-          # and prints the categorisation counts + reduction %.
-          # Fields: statistics.{satisfied,failed_known,noarch_unverified,rebuild,
-          #           new,lang_ver_unavailable,pass_to_deep_scan,reduction_pct}
-          #         duration_seconds
+          # Reads shallow_scan_metadata.json — fields sourced from shallow_scan.py
+          # write_shallow_scan_metadata() (line 300-354):
+          #   statistics.satisfied / failed_known / noarch_unverified / rebuild /
+          #   new / lang_ver_unavailable / pass_to_deep_scan / reduction_pct
+          #   duration_seconds / next_stage
           _print_shallow_summary() {
-            local brequest_dir="$1"
             local meta
-            meta=$(sudo -u powercore find "${brequest_dir}" \
+            meta=$(sudo -u powercore find "$1" \
               -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
             [ -z "$meta" ] && return
-            local _py; _py=$(mktemp /tmp/pc_ss_XXXXXX.py)
-            echo aW1wb3J0IGpzb24sIHN5cwpmID0gc3lzLmFyZ3ZbMV0KdHJ5OgogICAgZCA9IGpzb24ubG9hZChvcGVuKGYpKQogICAgcyA9IGQuZ2V0KCdzdGF0aXN0aWNzJywge30pCiAgICB0b3RhbCA9IHN1bShzLmdldChrLDApIGZvciBrIGluIFsnc2F0aXNmaWVkJywnZmFpbGVkX2tub3duJywnbm9hcmNoX3VudmVyaWZpZWQnLCdyZWJ1aWxkJywnbmV3JywnbGFuZ192ZXJfdW5hdmFpbGFibGUnXSkKICAgIGR1ciA9IGQuZ2V0KCdkdXJhdGlvbl9zZWNvbmRzJywgMCkKICAgIHByaW50KCcgIFNoYWxsb3cgU2NhbiBTdW1tYXJ5JykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgVG90YWwgdGFza3MgICAgICAgIDonLCB0b3RhbCkKICAgIHByaW50KCcgIFNBVElTRklFRCAgICAgICAgICA6Jywgcy5nZXQoJ3NhdGlzZmllZCcsMCkpCiAgICBwcmludCgnICBGQUlMRURfS05PV04gICAgICAgOicsIHMuZ2V0KCdmYWlsZWRfa25vd24nLDApKQogICAgcHJpbnQoJyAgTk9BUkNIX1VOVkVSSUZJRUQgIDonLCBzLmdldCgnbm9hcmNoX3VudmVyaWZpZWQnLDApKQogICAgcHJpbnQoJyAgUkVCVUlMRCAgICAgICAgICAgIDonLCBzLmdldCgncmVidWlsZCcsMCkpCiAgICBwcmludCgnICBORVcgICAgICAgICAgICAgICAgOicsIHMuZ2V0KCduZXcnLDApKQogICAgcHJpbnQoJyAgTEFOR19WRVJfVU5BVkFJTCAgIDonLCBzLmdldCgnbGFuZ192ZXJfdW5hdmFpbGFibGUnLDApKQogICAgcHJpbnQoJyAgUGFzcyB0byBEZWVwIFNjYW4gIDonLCBzLmdldCgncGFzc190b19kZWVwX3NjYW4nLDApKQogICAgcHJpbnQoJyAgUmVkdWN0aW9uICAgICAgICAgIDonLCBzdHIocy5nZXQoJ3JlZHVjdGlvbl9wY3QnLDApKSsnJScpCiAgICBwcmludCgnICBEdXJhdGlvbiAgICAgICAgICAgOicsIHN0cihyb3VuZChkdXIsMikpKydzJykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgTmV4dCBzdGFnZSAgICAgICAgIDonLCBkLmdldCgnbmV4dF9zdGFnZScsJ3Vua25vd24nKSkKZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoJyAgKGNvdWxkIG5vdCBwYXJzZSBzaGFsbG93X3NjYW5fbWV0YWRhdGEuanNvbjonLCBlKQo= \
-              | base64 -d > "${_py}"
-            sudo -u powercore python3 "${_py}" "${meta}" 2>/dev/null || true
-            rm -f "${_py}"
+            local satisfied failed_known noarch rebuild new_pkg lang_unavail pass_deep reduction dur next_stage
+            satisfied=$(_json_field   "${meta}" "satisfied")
+            failed_known=$(_json_field "${meta}" "failed_known")
+            noarch=$(_json_field       "${meta}" "noarch_unverified")
+            rebuild=$(_json_field      "${meta}" "rebuild")
+            new_pkg=$(_json_field      "${meta}" "new")
+            lang_unavail=$(_json_field "${meta}" "lang_ver_unavailable")
+            pass_deep=$(_json_field    "${meta}" "pass_to_deep_scan")
+            reduction=$(_json_field    "${meta}" "reduction_pct")
+            dur=$(_json_field          "${meta}" "duration_seconds")
+            next_stage=$(_json_field   "${meta}" "next_stage")
+            local total=$(( ${satisfied:-0} + ${failed_known:-0} + ${noarch:-0} + ${rebuild:-0} + ${new_pkg:-0} + ${lang_unavail:-0} ))
+            echo "  Shallow Scan Summary"
+            echo "  ----------------------------------------"
+            echo "  Total tasks        : ${total}"
+            echo "  SATISFIED          : ${satisfied:-0}"
+            echo "  FAILED_KNOWN       : ${failed_known:-0}"
+            echo "  NOARCH_UNVERIFIED  : ${noarch:-0}"
+            echo "  REBUILD            : ${rebuild:-0}"
+            echo "  NEW                : ${new_pkg:-0}"
+            echo "  LANG_VER_UNAVAIL   : ${lang_unavail:-0}"
+            echo "  Pass to Deep Scan  : ${pass_deep:-0}"
+            echo "  Reduction          : ${reduction:-0}%"
+            echo "  Duration           : ${dur:-0}s"
+            echo "  ----------------------------------------"
+            echo "  Next stage         : ${next_stage:-unknown}"
           }
 
           # ── _print_deep_scan_summary ─────────────────────────────────────────
-          # Reads the batch-mode final line from workflow.log written by
-          # progress_reporter.py final_summary() (non-interactive path):
+          # progress_reporter.py final_summary() writes to workflow.log (batch mode):
           #   "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
-          # Falls back to run_core.py log lines:
-          #   "Successful: N" / "Failed: N" / "Success rate: X%"
+          # Fallback: run_core._print_summary() writes individual lines.
           _print_deep_scan_summary() {
             [ ! -f "${WFLOG}" ] && return
             local done_line
             done_line=$(sudo -u powercore grep -a "DONE" "${WFLOG}" 2>/dev/null \
-              | grep -a "elapsed=" | tail -1)
+              | grep -a "elapsed=" | tail -1 || true)
             if [ -n "$done_line" ]; then
               echo "  Deep Scan Summary"
               echo "  ----------------------------------------"
               echo "  ${done_line}"
               echo "  ----------------------------------------"
             else
-              # Fallback: parse individual log lines from run_core._print_summary()
               local total success failed rate
-              total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+')
-              success=$(sudo -u powercore grep -a "Successful:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+')
-              failed=$(sudo -u powercore grep -a "^.*Failed: \d" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+$')
-              rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '[\d.]+%')
+              total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null \
+                | tail -1 | grep -oP '\d+' || true)
+              success=$(sudo -u powercore grep -a "Successful:" "${WFLOG}" 2>/dev/null \
+                | tail -1 | grep -oP '\d+' || true)
+              failed=$(sudo -u powercore grep -aP "Failed: \d" "${WFLOG}" 2>/dev/null \
+                | tail -1 | grep -oP '\d+$' || true)
+              rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null \
+                | tail -1 | grep -oP '[\d.]+%' || true)
               if [ -n "$total" ]; then
                 echo "  Deep Scan Summary"
                 echo "  ----------------------------------------"
@@ -740,28 +772,71 @@ jobs:
           }
 
           # ── _print_postprocess_summary ───────────────────────────────────────
-          # Reads post_process_summary.json (models.py totals keys):
-          #   total_packages, build_success, build_success_unverified,
-          #   install_fail, build_fail, test_fail, timeout, partial
+          # Reads post_process_summary.json — totals keys from models.py:
+          #   total_packages / build_success / build_success_unverified /
+          #   build_fail / install_fail / test_fail / timeout / partial
           _print_postprocess_summary() {
             local pp="$1/post_process_summary.json"
             sudo -u powercore test -f "${pp}" 2>/dev/null || return
-            local _py; _py=$(mktemp /tmp/pc_pp_XXXXXX.py)
-            echo aW1wb3J0IGpzb24sIHN5cwpmID0gc3lzLmFyZ3ZbMV0KdHJ5OgogICAgZCA9IGpzb24ubG9hZChvcGVuKGYpKQogICAgdCA9IGQuZ2V0KCd0b3RhbHMnLCB7fSkKICAgIHByaW50KCcgIFBvc3QtUHJvY2VzcyBTdW1tYXJ5JykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgQXJjaGl0ZWN0dXJlICAgICAgIDonLCBkLmdldCgnYXJjaGl0ZWN0dXJlJywndW5rbm93bicpKQogICAgcHJpbnQoJyAgUGFja2FnZXMgc3VibWl0dGVkIDonLCB0LmdldCgndG90YWxfcGFja2FnZXMnLCdOL0EnKSkKICAgIG9rICA9IHQuZ2V0KCdidWlsZF9zdWNjZXNzJywgMCkKICAgIG9rdSA9IHQuZ2V0KCdidWlsZF9zdWNjZXNzX3VudmVyaWZpZWQnLCAwKQogICAgaWYgb2sgID4gMDogcHJpbnQoJyAgQnVpbGQgc3VjY2VzcyAgICAgIDonLCBvaykKICAgIGlmIG9rdSA+IDA6IHByaW50KCcgIEJ1aWxkIHN1Y2Nlc3MgKFVWKSA6Jywgb2t1KQogICAgZm9yIGssbCBpbiBbKCdidWlsZF9mYWlsJywnQnVpbGQgZmFpbHVyZXMnKSwoJ2luc3RhbGxfZmFpbCcsJ0luc3RhbGwgZmFpbHVyZXMnKSwoJ3Rlc3RfZmFpbCcsJ1Rlc3QgZmFpbHVyZXMnKSwoJ3RpbWVvdXQnLCdUaW1lb3V0cycpLCgncGFydGlhbCcsJ1BhcnRpYWwnKV06CiAgICAgICAgdiA9IHQuZ2V0KGssIDApCiAgICAgICAgaWYgdiA+IDA6IHByaW50KCcgJywgbC5sanVzdCgxOSksICc6JywgdikKICAgIGlmIG9rICsgb2t1ID09IDAgYW5kIHQuZ2V0KCd0b3RhbF9wYWNrYWdlcycsIDApID4gMDoKICAgICAgICBwcmludCgpCiAgICAgICAgcHJpbnQoJyAgTk9URTogMCBidWlsZHMgLSBwYWNrYWdlcyBhbHJlYWR5IFNBVElTRklFRCBpbiBjYXRhbG9nJykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnICAoY291bGQgbm90IHBhcnNlIHBvc3RfcHJvY2Vzc19zdW1tYXJ5Lmpzb246JywgZSkK \
-              | base64 -d > "${_py}"
-            sudo -u powercore python3 "${_py}" "${pp}" 2>/dev/null || true
-            rm -f "${_py}"
+            local total ok ok_uv b_fail i_fail t_fail tmo partial arch
+            total=$(_json_field  "${pp}" "total_packages")
+            ok=$(_json_field     "${pp}" "build_success")
+            ok_uv=$(_json_field  "${pp}" "build_success_unverified")
+            b_fail=$(_json_field "${pp}" "build_fail")
+            i_fail=$(_json_field "${pp}" "install_fail")
+            t_fail=$(_json_field "${pp}" "test_fail")
+            tmo=$(_json_field    "${pp}" "timeout")
+            partial=$(_json_field "${pp}" "partial")
+            arch=$(_json_field   "${pp}" "architecture")
+            echo "  Post-Process Summary"
+            echo "  ----------------------------------------"
+            echo "  Architecture       : ${arch:-unknown}"
+            echo "  Packages submitted : ${total:-N/A}"
+            [ "${ok:-0}"     != "0" ] && echo "  Build success      : ${ok}"
+            [ "${ok_uv:-0}"  != "0" ] && echo "  Build success (UV) : ${ok_uv}"
+            [ "${b_fail:-0}" != "0" ] && echo "  Build failures     : ${b_fail}"
+            [ "${i_fail:-0}" != "0" ] && echo "  Install failures   : ${i_fail}"
+            [ "${t_fail:-0}" != "0" ] && echo "  Test failures      : ${t_fail}"
+            [ "${tmo:-0}"    != "0" ] && echo "  Timeouts           : ${tmo}"
+            [ "${partial:-0}" != "0" ] && echo "  Partial            : ${partial}"
+            if [ "${ok:-0}" = "0" ] && [ "${ok_uv:-0}" = "0" ] && [ "${total:-0}" != "0" ]; then
+              echo ""
+              echo "  NOTE: 0 builds - packages already SATISFIED in catalog"
+            fi
+            echo "  ----------------------------------------"
           }
 
           # ── _print_shallow_csv ───────────────────────────────────────────────
+          # Prints per-package shallow scan status from *_shallow_results.csv.
+          # Columns: shallow_status, needs_deep_scan, shallow_notes (csv_formatter.py)
           _print_shallow_csv() {
             local csv_path="$1"
             [ -z "$csv_path" ] && return
-            local _py; _py=$(mktemp /tmp/pc_scsv_XXXXXX.py)
-            echo aW1wb3J0IGNzdiwgc3lzCmYgPSBzeXMuYXJndlsxXQp0cnk6CiAgICByb3dzID0gbGlzdChjc3YuRGljdFJlYWRlcihvcGVuKGYsIGVuY29kaW5nPSd1dGYtOC1zaWcnKSkpCiAgICBpZiBub3Qgcm93czoKICAgICAgICBwcmludCgnICAoZW1wdHkpJykKICAgIGVsc2U6CiAgICAgICAgZm9yIHIgaW4gcm93czoKICAgICAgICAgICAgbmFtZSAgID0gci5nZXQoJ3BhY2thZ2VfbmFtZScpIG9yIHIuZ2V0KCduYW1lJywgJz8nKQogICAgICAgICAgICB2ZXIgICAgPSByLmdldCgncGFja2FnZV92ZXJzaW9uJykgb3Igci5nZXQoJ3ZlcnNpb24nLCAnPycpCiAgICAgICAgICAgIHN0YXR1cyA9IHIuZ2V0KCdzaGFsbG93X3N0YXR1cycsICc/JykKICAgICAgICAgICAgZGVlcCAgID0gci5nZXQoJ25lZWRzX2RlZXBfc2NhbicsICc/JykKICAgICAgICAgICAgbm90ZXMgID0gci5nZXQoJ3NoYWxsb3dfbm90ZXMnLCAnJykKICAgICAgICAgICAgdGFnID0gJ1NBVElTRklFRCcgaWYgc3RhdHVzID09ICdTQVRJU0ZJRUQnIGVsc2UgKCdORUVEUyBCVUlMRCcgaWYgZGVlcCA9PSAndHJ1ZScgZWxzZSBzdGF0dXMpCiAgICAgICAgICAgIHByaW50KCcgIFsnK3RhZysnXSAgJytuYW1lKycgICcrdmVyKQogICAgICAgICAgICBpZiBub3RlczoKICAgICAgICAgICAgICAgIHByaW50KCcgICAgICAgICAgICAgJytub3RlcykKZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoJyAgKGNvdWxkIG5vdCBwYXJzZTonLCBlKQo= \
-              | base64 -d > "${_py}"
-            sudo -u powercore python3 "${_py}" "${csv_path}" 2>/dev/null || true
-            rm -f "${_py}"
+            # Read header line to find column indices, then print each data row
+            sudo -u powercore awk -F',' '
+              NR==1 {
+                for (i=1;i<=NF;i++) {
+                  gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                  if ($i=="package_name" || $i=="name")         ni=i
+                  if ($i=="package_version" || $i=="version")   vi=i
+                  if ($i=="shallow_status")   si=i
+                  if ($i=="needs_deep_scan")  di=i
+                  if ($i=="shallow_notes")    oi=i
+                }
+                next
+              }
+              NF>1 {
+                gsub(/\r/,"")
+                name=ni?$ni:"?"
+                ver=vi?$vi:"?"
+                status=si?$si:"?"
+                deep=di?$di:"?"
+                notes=oi?$oi:""
+                tag=(status=="SATISFIED") ? "SATISFIED" : (deep=="true" ? "NEEDS BUILD" : status)
+                printf "  [%-11s]  %s  %s\n", tag, name, ver
+                if (notes != "") printf "               %s\n", notes
+              }
+            ' "${csv_path}" 2>/dev/null || true
           }
 
           # ════════════════════════════════════════════════════════════════════
@@ -784,7 +859,6 @@ jobs:
           # BRequest created in runtime/input/ or runtime/ root (config-dependent).
           # ════════════════════════════════════════════════════════════════════
           CSV_STEM="${CSV_NAME%.csv}"
-          CSV_STEM_SAFE=$(echo "${CSV_STEM}" | tr -c 'a-zA-Z0-9_-' '_')
 
           echo "------------------------------------------------------------"
           echo "  Stage 1/5  Pre-process  [waiting for BRequest creation]"
@@ -911,14 +985,14 @@ jobs:
 
             # ── ERROR ────────────────────────────────────────────────────────
             ERROR_FILE=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-              -name ".error" 2>/dev/null | grep "/${BREQUEST}/" | head -1)
+              -name ".error" 2>/dev/null | grep "/${BREQUEST}/" | head -1 || true)
             if [ -n "$ERROR_FILE" ]; then
               echo ""
               echo "  ERROR detected in ${BREQUEST}"
               echo "  .error: ${ERROR_FILE}"
               sudo -u powercore cat "${ERROR_FILE}" | sed 's/^/  /'
-              CUR_LOC=$(_find_brequest)
-              ERR_STAGE=$(echo "$CUR_LOC" | grep -oP '\d\d-[a-z-]+' | head -1)
+              CUR_LOCATION=$(_find_brequest)
+              ERR_STAGE=$(echo "$CUR_LOCATION" | grep -oP '\d\d-[a-z-]+' | head -1)
               [ -n "$ERR_STAGE" ] && _worker_journal "${ERR_STAGE}" 30
               echo "  (worker will retry — waiting for recovery or timeout)"
             fi
@@ -943,8 +1017,7 @@ jobs:
                 # Print per-stage summary when leaving a stage
                 case "${PREV_STAGE}" in
                   04-shallow-scan)
-                    # BRequest just moved out of shallow-scan → print shallow summary
-                    PREV_BREQ_DIR="${POWERCORE_RUNTIME}/queues/${PREV_STAGE}/outbox/${BREQUEST}"
+                    # BRequest just moved out of shallow-scan → print shallow summary.
                     # may already be gone; search all subfolders of the stage
                     BREQ_SEARCH=$(sudo -u powercore find \
                       "${POWERCORE_RUNTIME}/queues/${PREV_STAGE}" \
