@@ -1,429 +1,512 @@
 name: Currency Build V2 Test
 on:
-  workflow_dispatch:
-    inputs:
-      package_json:
-        description: >
-          Package data as a JSON object. Example:
-          {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":""}
-        required: true
-        type: string
-      validate_build_script_v2:
-        description: 'Run v2 build script via powercore'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      wheel_build:
-        description: 'Create wheel for all Python versions via powercore'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      build_docker:
-        description: 'Build docker image'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      powercore_version:
-        description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
-        required: true
-        type: string
-      large-runner-label:
-        description: 'Larger runner to use for resource-heavy builds'
-        required: false
-        type: choice
-        options:
-          - ''
-          - ubuntu-24.04-ppc64le-2xlarge-p10
-          - ubuntu-24.04-ppc64le-4xlarge-p10
+workflow_dispatch:
+inputs:
+package_json:
+description: >
+         Package data as a JSON object. Example:
+         {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":""}
+       required: true
+type: string
+validate_build_script_v2:
+description: 'Run v2 build script via powercore'
+required: true
+default: 'false'
+type: choice
+options:
+- 'false'
+- 'true'
+wheel_build:
+description: 'Create wheel for all Python versions via powercore'
+required: true
+default: 'false'
+type: choice
+options:
+- 'false'
+- 'true'
+build_docker:
+description: 'Build docker image'
+required: true
+default: 'false'
+type: choice
+options:
+- 'false'
+- 'true'
+powercore_version:
+description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
+required: true
+type: string
+large-runner-label:
+description: 'Larger runner to use for resource-heavy builds'
+required: false
+type: choice
+options:
+- ''
+- ubuntu-24.04-ppc64le-2xlarge-p10
+- ubuntu-24.04-ppc64le-4xlarge-p10
 
 run-name: >
-  ${{ inputs.large-runner-label != '' &&
-      format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
-      format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
-  }}
+ ${{ inputs.large-runner-label != '' &&
+     format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
+     format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
+ }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # build_info: Parses the package_json input, validates required fields, and
-  # writes variable.sh — a sourceable shell file uploaded as an artifact so
-  # every downstream job can download it and source it directly.
-  #
-  # Variables written to variable.sh:
-  #   PACKAGE_NAME             — from package_json.package_name
-  #   PACKAGE_VERSION          — from package_json.package_version
-  #   TECHNOLOGY               — from package_json.technology
-  #   TECHNOLOGY_VERSION       — from package_json.technology_version
-  #   UBI_VERSION              — from package_json.ubi_version (default: ubi9)
-  #   VALIDATE_BUILD_SCRIPT_V2 — from workflow input
-  #   WHEEL_BUILD              — from workflow input
-  #   BUILD_DOCKER             — from workflow input
-  #   POWERCORE_VERSION        — from workflow input
-  # ---------------------------------------------------------------------------
-  build_info:
-    runs-on: ubuntu-24.04-ppc64le
-    steps:
-      - name: Install jq
-        run: sudo apt update -y && sudo apt install -y jq
+# ---------------------------------------------------------------------------
+# build_info: Parses the package_json input, validates required fields, and
+# writes variable.sh — a sourceable shell file uploaded as an artifact so
+# every downstream job can download it and source it directly.
+#
+# Variables written to variable.sh:
+#   PACKAGE_NAME             — from package_json.package_name
+#   PACKAGE_VERSION          — from package_json.package_version
+#   TECHNOLOGY               — from package_json.technology
+#   TECHNOLOGY_VERSION       — from package_json.technology_version
+#   UBI_VERSION              — from package_json.ubi_version (default: ubi9)
+#   VALIDATE_BUILD_SCRIPT_V2 — from workflow input
+#   WHEEL_BUILD              — from workflow input
+#   BUILD_DOCKER             — from workflow input
+#   POWERCORE_VERSION        — from workflow input
+# ---------------------------------------------------------------------------
+build_info:
+runs-on: ubuntu-24.04-ppc64le
+steps:
+- name: Install jq
+run: sudo apt update -y && sudo apt install -y jq
 
-      - name: Parse package_json and write variable.sh
+- name: Parse package_json and write variable.sh
+run: |
+         PKG_JSON='${{ inputs.package_json }}'
+
+         # Validate JSON
+         if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
+           echo "❌ package_json is not valid JSON"
+           exit 1
+         fi
+
+         # Extract fields — technology_version key may have a leading space in
+         # some callers (e.g. {" technology_version": "3.12"}), handle both forms
+         PKG_NAME=$(echo "$PKG_JSON" | jq -r '.package_name    // empty')
+         PKG_VER=$(echo  "$PKG_JSON" | jq -r '.package_version // empty')
+         TECH=$(echo     "$PKG_JSON" | jq -r '.technology      // empty')
+         TECH_VER=$(echo "$PKG_JSON" | jq -r '.technology_version // (.["  technology_version"] // "")' 2>/dev/null || echo "")
+         UBI_VER=$(echo  "$PKG_JSON" | jq -r '.ubi_version // ""')
+
+         # Validate required fields
+         for field in PKG_NAME PKG_VER TECH; do
+           eval "val=\$$field"
+           if [ -z "$val" ]; then
+             echo "❌ Required field missing in package_json: $field"
+             exit 1
+           fi
+         done
+
+         # Default ubi_version to ubi9 when blank
+         UBI_VER="${UBI_VER:-ubi9}"
+
+         # Write variable.sh as plain KEY="VALUE" lines — no 'export' prefix so
+         # the file can be sourced in bash (source variable.sh) or loaded by any
+         # downstream step that reads it line by line into $GITHUB_ENV.
+         # Using printf avoids heredoc indentation issues in YAML run blocks.
+         printf '%s\n' \
+           "PACKAGE_NAME=\"${PKG_NAME}\"" \
+           "PACKAGE_VERSION=\"${PKG_VER}\"" \
+           "TECHNOLOGY=\"${TECH}\"" \
+           "TECHNOLOGY_VERSION=\"${TECH_VER}\"" \
+           "UBI_VERSION=\"${UBI_VER}\"" \
+           "VALIDATE_BUILD_SCRIPT_V2=\"${{ inputs.validate_build_script_v2 }}\"" \
+           "WHEEL_BUILD=\"${{ inputs.wheel_build }}\"" \
+           "BUILD_DOCKER=\"${{ inputs.build_docker }}\"" \
+           "POWERCORE_VERSION=\"${{ inputs.powercore_version }}\"" \
+           > variable.sh
+
+         echo "===== variable.sh ====="
+         cat variable.sh
+         echo "======================="
+         echo "✅ ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) ubi=${UBI_VER}"
+
+     - name: Upload variable.sh as artifact
+uses: actions/upload-artifact@v4
+with:
+name: build-info
+path: variable.sh
+
+# ---------------------------------------------------------------------------
+# build_v2: Downloads build-info artifact, sources variable.sh to get all
+# build parameters, then downloads PowerCore wheels from COS, installs
+# PowerCore, converts the parameters to a CSV, drops it into the preprocess
+# inbox, and polls until the pipeline completes or fails.
+# ---------------------------------------------------------------------------
+build_v2:
+needs: build_info
+if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' || inputs.build_docker == 'true' }}
+runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
+steps:
+- name: Checkout code
+uses: actions/checkout@v4
+
+- name: Download build-info artifact
+uses: actions/download-artifact@v4
+with:
+name: build-info
+
+- name: Load variable.sh into job environment
+run: |
+         echo "===== variable.sh ====="
+         cat variable.sh
+         echo "======================="
+         # Push every KEY="VALUE" line from variable.sh into $GITHUB_ENV so
+         # all subsequent steps in this job can reference ${{ env.KEY }}
+         while IFS='=' read -r key value; do
+           key="${key// /}"                                # strip any spaces from key
+           [[ -z "$key" || "$key" == \#* ]] && continue  # skip blanks/comments
+           value="${value%\"}"                             # strip trailing quote
+           value="${value#\"}"                             # strip leading quote
+           echo "${key}=${value}" >> $GITHUB_ENV
+         done < variable.sh
+
+     - name: Install system dependencies
+run: |
+         sudo apt update -y
+         sudo apt install -y wget curl tar jq git
+
+     - name: Install powercore wheels from COS
+env:
+GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+run: |
+         echo "Fetching IAM token..."
+         token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
+           -H "content-type: application/x-www-form-urlencoded" \
+           -H "accept: application/json" \
+           -d "grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey&apikey=$GHA_CURRENCY_SERVICE_ID_API_KEY")
+
+         if [[ $(echo "$token_request" | jq -r '.errorCode') != "null" ]]; then
+           echo "ERROR: IAM token request failed. Response: $token_request"
+           exit 1
+         fi
+
+         token=$(echo "$token_request" | jq -r '.access_token')
+         if [[ -z "$token" || "$token" == "null" ]]; then
+           echo "ERROR: IAM token missing from response: $token_request"
+           exit 1
+         fi
+
+         BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
+         LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
+
+         mkdir -p powercore-wheels
+
+         # POWERCORE_VERSION is loaded from variable.sh via $GITHUB_ENV
+         echo "Targeting powercore wheels version: ${POWERCORE_VERSION}"
+         echo "Listing COS objects from: ${LIST_URL}"
+
+         list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
+         curl_status=$?
+         if [[ $curl_status -ne 0 ]]; then
+           echo "ERROR: Failed to list wheels from COS. curl exit code: ${curl_status}"
+           exit 1
+         fi
+
+         if echo "$list_response" | grep -q "<Error>"; then
+           echo "ERROR: COS list request returned an error response:"
+           echo "$list_response"
+           exit 1
+         fi
+
+         all_keys=$(printf '%s' "$list_response" | tr '<' '\n' | sed -n 's:^Key>\([^<]*\.whl\)$:\1:p')
+
+         if [[ -z "$all_keys" ]]; then
+           echo "ERROR: No wheel files were found in COS list response."
+           echo "COS list response:"
+           echo "$list_response"
+           exit 1
+         fi
+
+         echo "Available wheel keys:"
+         echo "$all_keys"
+
+         matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
+
+         if [[ -z "$matched_keys" ]]; then
+           echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
+           echo "Available wheels:"
+           echo "$all_keys"
+           exit 1
+         fi
+
+         echo "Matched wheels for version ${POWERCORE_VERSION}:"
+         echo "$matched_keys"
+
+         while IFS= read -r wheel_key; do
+           [[ -z "$wheel_key" ]] && continue
+           echo "Downloading: ${wheel_key}"
+           if ! curl -fsS -H "Authorization: bearer $token" \
+             -o "powercore-wheels/$(basename "$wheel_key")" \
+             "${BUCKET_URL}/${wheel_key}"; then
+             echo "ERROR: Failed to download wheel '${wheel_key}'"
+             exit 1
+           fi
+         done <<< "$matched_keys"
+
+         echo "Downloaded wheels:"
+         ls -lh powercore-wheels/
+         echo "Downloading powercore-config.env..."
+         if ! curl -fsS -H "Authorization: bearer $token" \
+           -o "powercore-config.env" \
+           "${BUCKET_URL}/powercore-config.env"; then
+           echo "ERROR: Failed to download powercore-config.env"
+           exit 1
+         fi
+         echo "powercore-config.env contents:"
+         cat powercore-config.env
+
+     - name: Install powercore wheels
+run: |
+         python3.12 -m pip install --upgrade pip --user --quiet
+
+         # Step 1: install the powercore_installer wheel as root so that the
+         # powercore-install console script lands in /usr/local/bin and can be
+         # called with sudo in the next step.
+         installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
+         if [[ -z "$installer_wheel" ]]; then
+           echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
+           exit 1
+         fi
+         echo "Installing powercore_installer from: ${installer_wheel}"
+         sudo python3.12 -m pip install "$installer_wheel" --force-reinstall
+
+         echo "Installed packages:"
+         python3.12 -m pip list | grep -i powercore
+
+      - name: Install IBM Cloud CLI
         run: |
-          PKG_JSON='${{ inputs.package_json }}'
+          echo "--- Installing IBM Cloud CLI ---"
+          curl -fsSL https://clis.cloud.ibm.com/install/linux | sudo sh
 
-          # Validate JSON
-          if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
-            echo "❌ package_json is not valid JSON"
-            exit 1
-          fi
+          echo "--- Verifying ibmcloud CLI ---"
+          ibmcloud version
 
-          # Extract fields — technology_version key may have a leading space in
-          # some callers (e.g. {" technology_version": "3.12"}), handle both forms
-          PKG_NAME=$(echo "$PKG_JSON" | jq -r '.package_name    // empty')
-          PKG_VER=$(echo  "$PKG_JSON" | jq -r '.package_version // empty')
-          TECH=$(echo     "$PKG_JSON" | jq -r '.technology      // empty')
-          TECH_VER=$(echo "$PKG_JSON" | jq -r '.technology_version // (.["  technology_version"] // "")' 2>/dev/null || echo "")
-          UBI_VER=$(echo  "$PKG_JSON" | jq -r '.ubi_version // ""')
+          echo "--- Installing cloud-object-storage plugin ---"
+          ibmcloud plugin install cloud-object-storage -f
+          echo "--- Installing container-registry plugin ---"
+          ibmcloud plugin install container-registry -f
 
-          # Validate required fields
-          for field in PKG_NAME PKG_VER TECH; do
-            eval "val=\$$field"
-            if [ -z "$val" ]; then
-              echo "❌ Required field missing in package_json: $field"
-              exit 1
-            fi
-          done
-
-          # Default ubi_version to ubi9 when blank
-          UBI_VER="${UBI_VER:-ubi9}"
-
-          # Write variable.sh as plain KEY="VALUE" lines — no 'export' prefix so
-          # the file can be sourced in bash (source variable.sh) or loaded by any
-          # downstream step that reads it line by line into $GITHUB_ENV.
-          # Using printf avoids heredoc indentation issues in YAML run blocks.
-          printf '%s\n' \
-            "PACKAGE_NAME=\"${PKG_NAME}\"" \
-            "PACKAGE_VERSION=\"${PKG_VER}\"" \
-            "TECHNOLOGY=\"${TECH}\"" \
-            "TECHNOLOGY_VERSION=\"${TECH_VER}\"" \
-            "UBI_VERSION=\"${UBI_VER}\"" \
-            "VALIDATE_BUILD_SCRIPT_V2=\"${{ inputs.validate_build_script_v2 }}\"" \
-            "WHEEL_BUILD=\"${{ inputs.wheel_build }}\"" \
-            "BUILD_DOCKER=\"${{ inputs.build_docker }}\"" \
-            "POWERCORE_VERSION=\"${{ inputs.powercore_version }}\"" \
-            > variable.sh
-
-          echo "===== variable.sh ====="
-          cat variable.sh
-          echo "======================="
-          echo "✅ ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) ubi=${UBI_VER}"
-
-      - name: Upload variable.sh as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-info
-          path: variable.sh
-
-  # ---------------------------------------------------------------------------
-  # build_v2: Downloads build-info artifact, sources variable.sh to get all
-  # build parameters, then downloads PowerCore wheels from COS, installs
-  # PowerCore, converts the parameters to a CSV, drops it into the preprocess
-  # inbox, and polls until the pipeline completes or fails.
-  # ---------------------------------------------------------------------------
-  build_v2:
-    needs: build_info
-    if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' || inputs.build_docker == 'true' }}
-    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download build-info artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-info
-
-      - name: Load variable.sh into job environment
-        run: |
-          echo "===== variable.sh ====="
-          cat variable.sh
-          echo "======================="
-          # Push every KEY="VALUE" line from variable.sh into $GITHUB_ENV so
-          # all subsequent steps in this job can reference ${{ env.KEY }}
-          while IFS='=' read -r key value; do
-            key="${key// /}"                                # strip any spaces from key
-            [[ -z "$key" || "$key" == \#* ]] && continue  # skip blanks/comments
-            value="${value%\"}"                             # strip trailing quote
-            value="${value#\"}"                             # strip leading quote
-            echo "${key}=${value}" >> $GITHUB_ENV
-          done < variable.sh
-
-      - name: Install system dependencies
-        run: |
-          sudo apt update -y
-          sudo apt install -y wget curl tar jq git
-
-      - name: Install powercore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          echo "Fetching IAM token..."
-          token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
-            -H "content-type: application/x-www-form-urlencoded" \
-            -H "accept: application/json" \
-            -d "grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey&apikey=$GHA_CURRENCY_SERVICE_ID_API_KEY")
-
-          if [[ $(echo "$token_request" | jq -r '.errorCode') != "null" ]]; then
-            echo "ERROR: IAM token request failed. Response: $token_request"
-            exit 1
-          fi
-
-          token=$(echo "$token_request" | jq -r '.access_token')
-          if [[ -z "$token" || "$token" == "null" ]]; then
-            echo "ERROR: IAM token missing from response: $token_request"
-            exit 1
-          fi
-
-          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
-          LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
-
-          mkdir -p powercore-wheels
-
-          # POWERCORE_VERSION is loaded from variable.sh via $GITHUB_ENV
-          echo "Targeting powercore wheels version: ${POWERCORE_VERSION}"
-          echo "Listing COS objects from: ${LIST_URL}"
-
-          list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
-          curl_status=$?
-          if [[ $curl_status -ne 0 ]]; then
-            echo "ERROR: Failed to list wheels from COS. curl exit code: ${curl_status}"
-            exit 1
-          fi
-
-          if echo "$list_response" | grep -q "<Error>"; then
-            echo "ERROR: COS list request returned an error response:"
-            echo "$list_response"
-            exit 1
-          fi
-
-          all_keys=$(printf '%s' "$list_response" | tr '<' '\n' | sed -n 's:^Key>\([^<]*\.whl\)$:\1:p')
-
-          if [[ -z "$all_keys" ]]; then
-            echo "ERROR: No wheel files were found in COS list response."
-            echo "COS list response:"
-            echo "$list_response"
-            exit 1
-          fi
-
-          echo "Available wheel keys:"
-          echo "$all_keys"
-
-          matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
-
-          if [[ -z "$matched_keys" ]]; then
-            echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
-            echo "Available wheels:"
-            echo "$all_keys"
-            exit 1
-          fi
-
-          echo "Matched wheels for version ${POWERCORE_VERSION}:"
-          echo "$matched_keys"
-
-          while IFS= read -r wheel_key; do
-            [[ -z "$wheel_key" ]] && continue
-            echo "Downloading: ${wheel_key}"
-            if ! curl -fsS -H "Authorization: bearer $token" \
-              -o "powercore-wheels/$(basename "$wheel_key")" \
-              "${BUCKET_URL}/${wheel_key}"; then
-              echo "ERROR: Failed to download wheel '${wheel_key}'"
-              exit 1
-            fi
-          done <<< "$matched_keys"
-
-          echo "Downloaded wheels:"
-          ls -lh powercore-wheels/
-          echo "Downloading powercore-config.env..."
-          if ! curl -fsS -H "Authorization: bearer $token" \
-            -o "powercore-config.env" \
-            "${BUCKET_URL}/powercore-config.env"; then
-            echo "ERROR: Failed to download powercore-config.env"
-            exit 1
-          fi
-          echo "powercore-config.env contents:"
-          cat powercore-config.env
-
-      - name: Install powercore wheels
-        run: |
-          python3.12 -m pip install --upgrade pip --user --quiet
-
-          # Step 1: install the powercore_installer wheel as root so that the
-          # powercore-install console script lands in /usr/local/bin and can be
-          # called with sudo in the next step.
-          installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
-          if [[ -z "$installer_wheel" ]]; then
-            echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
-            exit 1
-          fi
-          echo "Installing powercore_installer from: ${installer_wheel}"
-          sudo python3.12 -m pip install "$installer_wheel" --force-reinstall
-
-          echo "Installed packages:"
-          python3.12 -m pip list | grep -i powercore
+          echo "--- Installed ibmcloud plugins ---"
+          ibmcloud plugin list
 
       - name: Run powercore-install
         run: |
+          echo "--- powercore-config.env contents ---"
+          cat "$(pwd)/powercore-config.env"
+
+          echo "--- Running powercore-install ---"
           sudo powercore-install \
             --config "$(pwd)/powercore-config.env" \
             --non-interactive
 
-      - name: Create PowerCore queue directories
-        run: |
-          POWERCORE_RUNTIME="$(sudo -u powercore bash -c 'echo $HOME')/.local/share/powercore/runtime"
-
-          # powercore-install calls deploy-workflow.sh via $SCRIPT_DIR/01-Prepare/
-          # which does not exist in the GHA runner context, so queues are never
-          # created by the installer. Create them explicitly here as powercore user.
-          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
-            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/inbox"
-            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/outbox"
-            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/processing"
-            sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/queues/${stage}/failed"
-          done
-          sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/requests"
-          sudo -u powercore mkdir -p "${POWERCORE_RUNTIME}/incoming"
-
-          echo "✅ Queue directories created:"
-          sudo -u powercore find "${POWERCORE_RUNTIME}/queues" -type d | sort
-
-      - name: Start and verify PowerCore systemd workers
-        run: |
-          POWERCORE_UID=$(id -u powercore)
-          XDG_RUNTIME_DIR="/run/user/${POWERCORE_UID}"
-          DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
-
-          # Locate the powercore-worker binary. powercore-install may place it
-          # in /usr/local/bin (system-wide pip install) or in the powercore
-          # user's local bin (~/.local/bin) depending on how the wheels were
-          # installed. Check both and fail early if neither is found.
-          # Use || true so a non-zero exit from the subshell doesn't abort the
-          # step under bash's implicit -e before the guard below can run.
-          WORKER_BIN=$(sudo -u powercore bash -c '
-            for candidate in \
-              /usr/local/bin/powercore-worker \
-              "${HOME}/.local/bin/powercore-worker" \
-              /usr/bin/powercore-worker; do
-              if [ -x "$candidate" ]; then
-                echo "$candidate"
-                exit 0
-              fi
-            done
-          ' || true)
-          if [[ -z "$WORKER_BIN" ]]; then
-            echo "❌ powercore-worker binary not found. Searched:"
-            echo "     /usr/local/bin/powercore-worker"
-            echo "     /home/powercore/.local/bin/powercore-worker"
-            echo "     /usr/bin/powercore-worker"
-            echo "Installed packages:"
-            sudo python3.12 -m pip list | grep -i powercore || true
-            sudo -u powercore python3.12 -m pip list | grep -i powercore || true
+          echo "--- Verifying powercore system user was created ---"
+          if ! id powercore &>/dev/null; then
+            echo "ERROR: 'powercore' system user was not created by powercore-install"
             exit 1
           fi
-          echo "✅ Found powercore-worker at: ${WORKER_BIN}"
+          echo "powercore user: $(id powercore)"
 
-          SYSTEMD_USER_DIR="/home/powercore/.config/systemd/user"
-          sudo -u powercore mkdir -p "${SYSTEMD_USER_DIR}"
+          echo "--- Checking powercore HOME directory ---"
+          PC_HOME=$(getent passwd powercore | cut -d: -f6)
+          echo "powercore HOME: ${PC_HOME}"
+          ls -la "${PC_HOME}" || echo "WARN: could not list powercore HOME"
 
-          UNIT_FILE="${SYSTEMD_USER_DIR}/powercore-worker@.service"
-          printf '%s\n' \
-            '[Unit]' \
-            'Description=PowerCore Worker %i (User Service)' \
-            'After=network.target' \
-            'PartOf=powercore-workflow.target' \
-            '' \
-            '[Service]' \
-            'Type=simple' \
-            'WorkingDirectory=/home/powercore' \
-            'Environment=POWERCORE_RUNTIME=/home/powercore/.local/share/powercore/runtime' \
-            'Environment=BULKSEARCH_RUNTIME=/home/powercore/.local/share/powercore/runtime' \
-            'Environment=POWERCORE_POLL_INTERVAL=30' \
-            'Environment=POWERCORE_MAX_OUTBOX_ITEMS=5' \
-            'Environment=POWERCORE_MIN_DISK_SPACE_GB=10' \
-            "Environment=PATH=/home/powercore/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-            'EnvironmentFile=-/home/powercore/.local/share/powercore/runtime/config/systemd.env' \
-            "ExecStart=${WORKER_BIN} %i" \
-            'Restart=always' \
-            'RestartSec=10' \
-            '' \
-            '[Install]' \
-            'WantedBy=default.target' \
-            | sudo -u powercore tee "${UNIT_FILE}" > /dev/null
-          echo "✅ Unit file written: ${UNIT_FILE}"
-          sudo -u powercore cat "${UNIT_FILE}"
+          echo "--- Installed powercore packages (root pip) ---"
+          sudo python3.12 -m pip list 2>/dev/null | grep -i powercore || echo "WARN: no powercore packages found under root pip"
 
-          # Reload daemon so the updated unit is picked up
-          sudo -u powercore \
-            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-            systemctl --user daemon-reload
+          echo "--- Installed powercore packages (powercore user pip) ---"
+          sudo -u powercore python3.12 -m pip list 2>/dev/null | grep -i powercore || echo "WARN: no powercore packages found under powercore user pip"
 
-          # Start the workflow target (which starts all stage workers via Wants=)
-          sudo -u powercore \
-            XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-            systemctl --user start powercore-workflow.target
-
-          # Give workers a moment to start
-          sleep 5
-
-          # Verify each worker is actually running — fail the step if any are not
-          ALL_OK=true
-          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
-            STATUS=$(sudo -u powercore \
-              XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-              DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-              systemctl --user is-active "powercore-worker@${stage}.service" 2>/dev/null || true)
-            if [ "$STATUS" = "active" ]; then
-              echo "✅ powercore-worker@${stage}: active"
+          echo "--- Locating powercore-worker binary ---"
+          for bin_path in /usr/local/bin/powercore-worker /usr/bin/powercore-worker \
+                          "$(getent passwd powercore | cut -d: -f6)/.local/bin/powercore-worker"; do
+            if [ -x "$bin_path" ]; then
+              echo "Found: ${bin_path}"
             else
-              echo "❌ powercore-worker@${stage}: ${STATUS}"
-              sudo -u powercore \
-                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-                DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-                systemctl --user status "powercore-worker@${stage}.service" --no-pager || true
-              ALL_OK=false
+              echo "Not found: ${bin_path}"
             fi
           done
 
-          if [ "$ALL_OK" = "false" ]; then
-            echo ""
-            echo "❌ One or more workers failed to start. Aborting."
+          echo "--- Installed systemd unit files ---"
+          PC_HOME=$(getent passwd powercore | cut -d: -f6)
+          find "${PC_HOME}/.config/systemd/user/" -name "*.service" -o -name "*.target" 2>/dev/null \
+            | sort || echo "WARN: no unit files found under powercore user systemd directory"
+
+      - name: Create PowerCore queue directories
+        run: |
+          # POWERCORE_RUNTIME is determined by POWERCORE_WORKSPACE in powercore-config.env.
+          # The install chain is:
+          #   powercore-install → automated-powercore-setup.sh:1075
+          #     POWERCORE_RUNTIME="${POWERCORE_WORKSPACE}/runtime"
+          #     (your config: POWERCORE_WORKSPACE=/home/powercore/powercore)
+          #     → /home/powercore/powercore/runtime
+          #   setup.sh:1182 writes this into systemd.env (read by all workers at startup)
+          #   setup.sh:1080 calls deploy-workflow.sh which creates the queue dirs there
+          #
+          # We read the path from systemd.env — the single source of truth written by
+          # the installer — instead of hardcoding it. Then we verify/fill any missing
+          # dirs and export the resolved path to $GITHUB_ENV for every downstream step.
+
+          if ! id powercore &>/dev/null; then
+            echo "ERROR: 'powercore' user does not exist — cannot create queue directories"
             exit 1
           fi
 
-          echo ""
-          echo "✅ All PowerCore workers running"
+          PC_HOME=$(getent passwd powercore | cut -d: -f6)
 
-      # -----------------------------------------------------------------------
-      # Convert the JSON input to a CSV file and drop it into the PowerCore
-      # preprocess inbox. The 03-preprocess worker picks up any file from its
-      # inbox, creates a BRequest directory, and hands it to 04-shallow-scan.
-      #
-      # CSV column names match the ColumnMapper.COLUMN_MAPPINGS aliases in
-      # 03-Preprocess/src/powercore/preprocess/preprocess.py so that the
-      # preprocess stage can map them without any ambiguity.
-      #
-      # Required columns : package_name, package_version, technology
-      # Optional columns : technology_version (defaults to lang default),
-      #                    ubi_version        (blank → "ubi9" applied by preprocess)
-      # -----------------------------------------------------------------------
+          # ── Resolve POWERCORE_RUNTIME from systemd.env ──────────────────────
+          # The installer writes systemd.env to:
+          #   ${POWERCORE_WORKSPACE}/runtime/config/systemd.env
+          # With your config (POWERCORE_WORKSPACE=/home/powercore/powercore):
+          #   /home/powercore/powercore/runtime/config/systemd.env
+          SYSTEMD_ENV=$(sudo -u powercore find "${PC_HOME}" \
+            -maxdepth 5 -name "systemd.env" -path "*/runtime/config/systemd.env" \
+            2>/dev/null | head -1)
+
+          if [ -n "$SYSTEMD_ENV" ]; then
+            echo "--- Found systemd.env: ${SYSTEMD_ENV} ---"
+            sudo -u powercore cat "${SYSTEMD_ENV}"
+            POWERCORE_RUNTIME=$(sudo -u powercore grep -m1 '^POWERCORE_RUNTIME=' "${SYSTEMD_ENV}" \
+              | cut -d= -f2- | tr -d ' "')
+            echo "--- POWERCORE_RUNTIME from systemd.env: ${POWERCORE_RUNTIME} ---"
+          else
+            echo "WARN: systemd.env not found under ${PC_HOME} — installer may not have completed"
+            echo "      Expected path: ${PC_HOME}/powercore/runtime/config/systemd.env"
+          fi
+
+          # Fallback: derive from POWERCORE_WORKSPACE default (matches your config)
+          if [ -z "$POWERCORE_RUNTIME" ]; then
+            POWERCORE_RUNTIME="${PC_HOME}/powercore/runtime"
+            echo "WARN: falling back to default path: ${POWERCORE_RUNTIME}"
+          fi
+
+          echo "--- Using POWERCORE_RUNTIME: ${POWERCORE_RUNTIME} ---"
+
+          # ── Export for all downstream steps in this job ──────────────────────
+          echo "POWERCORE_RUNTIME=${POWERCORE_RUNTIME}" >> "$GITHUB_ENV"
+
+          # ── Verify and fill any missing queue dirs ───────────────────────────
+          # deploy-workflow.sh creates: inbox/outbox/processing/failed per stage.
+          # worker.py also auto-creates inbox/outbox/processing on startup (L112-114),
+          # but NOT failed/ or requests/. Ensure all exist.
+          echo "--- Checking queue directories ---"
+          CREATED=0; EXISTING=0
+
+          _ensure_dir() {
+            if sudo -u powercore test -d "$1" 2>/dev/null; then
+              echo "  EXISTS : ${1#${POWERCORE_RUNTIME}/}"
+              EXISTING=$(( EXISTING + 1 ))
+            else
+              sudo -u powercore mkdir -p "$1"
+              echo "  CREATED: ${1#${POWERCORE_RUNTIME}/}"
+              CREATED=$(( CREATED + 1 ))
+            fi
+          }
+
+          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+            for sub in inbox outbox processing failed; do
+              _ensure_dir "${POWERCORE_RUNTIME}/queues/${stage}/${sub}"
+            done
+          done
+          for dir in requests incoming input logs; do
+            _ensure_dir "${POWERCORE_RUNTIME}/${dir}"
+          done
+
+          echo ""
+          echo "  Summary: ${CREATED} created, ${EXISTING} already existed"
+
+          echo "--- Final queue directory tree ---"
+          sudo -u powercore find "${POWERCORE_RUNTIME}/queues" -type d | sort
+
+          echo "--- Full runtime tree (maxdepth 3) ---"
+          sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 3 -type d | sort
+
+      - name: Switch to powercore user and verify systemd target
+        run: |
+          if ! id powercore &>/dev/null; then
+            echo "ERROR: 'powercore' user does not exist"
+            exit 1
+          fi
+
+          POWERCORE_UID=$(id -u powercore)
+          XDG_DIR="/run/user/${POWERCORE_UID}"
+          DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
+
+          echo "--- powercore UID: ${POWERCORE_UID} ---"
+          echo "--- XDG_RUNTIME_DIR: ${XDG_DIR} ---"
+
+          echo "--- Checking XDG_RUNTIME_DIR exists (loginctl may need to create it) ---"
+          if [ ! -d "${XDG_DIR}" ]; then
+            echo "WARN: ${XDG_DIR} does not exist — attempting loginctl linger enable"
+            sudo loginctl enable-linger powercore || true
+            sleep 3
+          fi
+          ls -la "${XDG_DIR}" 2>/dev/null || echo "WARN: ${XDG_DIR} still not available"
+
+          echo "--- Reloading systemd user daemon ---"
+          sudo -u powercore \
+            XDG_RUNTIME_DIR="${XDG_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+            systemctl --user daemon-reload
+
+          echo "--- Starting powercore-workflow.target ---"
+          sudo -u powercore \
+            XDG_RUNTIME_DIR="${XDG_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+            systemctl --user start powercore-workflow.target || true
+
+          echo "--- Waiting 30 s for workers to initialise ---"
+          sleep 30
+
+          echo "--- powercore-workflow.target status ---"
+          sudo -u powercore \
+            XDG_RUNTIME_DIR="${XDG_DIR}" \
+            DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+            systemctl --user status powercore-workflow.target --no-pager || true
+
+          echo "--- Per-worker unit status ---"
+          ALL_ACTIVE=true
+          for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+            STATUS=$(sudo -u powercore \
+              XDG_RUNTIME_DIR="${XDG_DIR}" \
+              DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+              systemctl --user is-active "powercore-worker@${stage}.service" 2>/dev/null || true)
+            echo "  powercore-worker@${stage}: ${STATUS}"
+            if [ "$STATUS" != "active" ]; then
+              echo "  --- Journal for powercore-worker@${stage} ---"
+              sudo -u powercore \
+                XDG_RUNTIME_DIR="${XDG_DIR}" \
+                DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+                journalctl --user -u "powercore-worker@${stage}.service" \
+                  --no-pager -n 50 2>/dev/null || true
+              ALL_ACTIVE=false
+            fi
+          done
+
+          if [ "$ALL_ACTIVE" = "false" ]; then
+            echo "ERROR: one or more PowerCore workers failed to reach 'active' state"
+            exit 1
+          fi
+          echo "--- All PowerCore workers active ---"
+
+     # -----------------------------------------------------------------------
+# Convert the JSON input to a CSV file and drop it into the PowerCore
+# preprocess inbox. The 03-preprocess worker picks up any file from its
+# inbox, creates a BRequest directory, and hands it to 04-shallow-scan.
+#
+# CSV column names match the ColumnMapper.COLUMN_MAPPINGS aliases in
+# 03-Preprocess/src/powercore/preprocess/preprocess.py so that the
+# preprocess stage can map them without any ambiguity.
+#
+# Required columns : package_name, package_version, technology
+# Optional columns : technology_version (defaults to lang default),
+#                    ubi_version        (blank → "ubi9" applied by preprocess)
+# -----------------------------------------------------------------------
       - name: Convert package JSON to CSV and drop into PowerCore inbox
         id: drop_csv
         run: |
@@ -431,10 +514,25 @@ jobs:
           # "Load variable.sh into job environment" step above.
           # No JSON re-parsing needed.
 
-          # Resolve the powercore runtime directory (set by powercore-install)
-          POWERCORE_RUNTIME="$(sudo -u powercore bash -c 'echo $HOME')/.local/share/powercore/runtime"
+          echo "--- Environment variables from variable.sh ---"
+          echo "  PACKAGE_NAME       = ${PACKAGE_NAME}"
+          echo "  PACKAGE_VERSION    = ${PACKAGE_VERSION}"
+          echo "  TECHNOLOGY         = ${TECHNOLOGY}"
+          echo "  TECHNOLOGY_VERSION = ${TECHNOLOGY_VERSION}"
+          echo "  UBI_VERSION        = ${UBI_VERSION}"
 
+          # POWERCORE_RUNTIME is resolved from systemd.env in the
+          # "Create PowerCore queue directories" step and exported via $GITHUB_ENV.
           INBOX_DIR="${POWERCORE_RUNTIME}/queues/03-preprocess/inbox"
+
+          echo "--- Verifying inbox directory exists ---"
+          if ! sudo -u powercore test -d "${INBOX_DIR}"; then
+            echo "ERROR: inbox directory does not exist: ${INBOX_DIR}"
+            echo "--- Runtime tree (maxdepth 4) ---"
+            sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 4 | sort || true
+            exit 1
+          fi
+          echo "Inbox OK: ${INBOX_DIR}"
 
           # Filename includes package name + run ID so parallel runs don't collide
           CSV_NAME="${PACKAGE_NAME}-${{ github.run_id }}.csv"
@@ -447,96 +545,330 @@ jobs:
             "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},${TECHNOLOGY_VERSION},${UBI_VERSION}" \
             | sudo -u powercore tee "${CSV_PATH}" > /dev/null
 
-          echo "✅ CSV written to inbox: ${CSV_PATH}"
+          echo "--- CSV written to inbox: ${CSV_PATH} ---"
           echo "Contents:"
           sudo -u powercore cat "${CSV_PATH}"
 
+          echo "--- Inbox directory after drop ---"
+          sudo -u powercore ls -lh "${INBOX_DIR}"
+
           # Export for the polling step
-          echo "csv_name=${CSV_NAME}"              >> $GITHUB_OUTPUT
+          echo "csv_name=${CSV_NAME}"                    >> $GITHUB_OUTPUT
           echo "powercore_runtime=${POWERCORE_RUNTIME}" >> $GITHUB_OUTPUT
 
-      # -----------------------------------------------------------------------
-      # Poll until:
-      #   SUCCESS — BRequest directory appears in $RUNTIME/requests/
-      #             (worker.py _complete_item final-stage branch)
-      #   FAILURE — a .error file appears inside the BRequest directory
-      #             (worker.py _handle_error branch)
-      #   TIMEOUT — GHA step timeout reached
-      #
-      # Progress line printed every poll cycle shows current stage location.
-      # -----------------------------------------------------------------------
+     # -----------------------------------------------------------------------
+     # Track the BRequest directory as it moves through every stage.
+     #
+     # How the pipeline actually works (grounded in source code):
+     #
+     #   worker.py StageWorker._acquire_next_item():
+     #     inbox/ → (atomic rename) → processing/
+     #
+     #   worker.py StageWorker._complete_item():
+     #     processing/ → (rename) → outbox/ → (rename) → next-stage/inbox/
+     #     final stage (07-bookkeeping, next_stage=None):
+     #       outbox/ → (rename) → runtime/requests/
+     #
+     #   adapters/preprocess.py process_file():
+     #     input: CSV file in queues/03-preprocess/processing/
+     #     output: BRequest_* dir created in runtime/input/
+     #     _complete_item then moves it → queues/04-shallow-scan/inbox/
+     #     NOTE: BRequest dir does NOT exist inside 03-preprocess/queues at all —
+     #           03-preprocess processes raw files, not BRequest dirs.
+     #
+     #   adapters/shallow_scan.py:
+     #     Checks deep_scan_input.csv inside BRequest. If it has rows:
+     #       → 05-deep-scan
+     #     Else (all packages already satisfied):
+     #       → 06-post-process  (skips deep-scan entirely)
+     #
+     #   Error handling (_handle_error):
+     #     Writes BRequest_dir/.error with "ExceptionType: message"
+     #     Then renames BRequest back to inbox/ for retry.
+     #     There is NO permanent failed/ dir in the new worker.
+     #     The .error file travels with the BRequest back to inbox.
+     #
+     # Full location space for a BRequest (from source):
+     #   queues/04-shallow-scan/{inbox,processing,outbox}/BRequest_*
+     #   queues/05-deep-scan/{inbox,processing,outbox}/BRequest_*    (may be skipped)
+     #   queues/06-post-process/{inbox,processing,outbox}/BRequest_*
+     #   queues/07-bookkeeping/{inbox,processing,outbox}/BRequest_*
+     #   requests/BRequest_*   ← terminal success (worker.py:254)
+     #
+     # Poll every 10 s. Immediately log when location changes.
+     # Soft timeout at 10500 s (175 min) to beat the 180-min GHA hard kill.
+     # -----------------------------------------------------------------------
       - name: Wait for PowerCore pipeline to complete
         timeout-minutes: 180
         run: |
           POWERCORE_RUNTIME="${{ steps.drop_csv.outputs.powercore_runtime }}"
           CSV_NAME="${{ steps.drop_csv.outputs.csv_name }}"
-          # PACKAGE_NAME is already in the environment from variable.sh
           PKG_NAME="${PACKAGE_NAME}"
 
-          POLL_INTERVAL=30
+          POLL_INTERVAL=10
           ELAPSED=0
+          TIMEOUT_SECS=10500        # 175 min soft limit — fires before GHA's 180-min hard kill
           BREQUEST=""
+          PREV_LOCATION=""          # last known relative path; used to detect transitions
 
-          echo "⏳ Waiting for PowerCore to process: ${CSV_NAME}"
-          echo "   Runtime dir : ${POWERCORE_RUNTIME}"
-          echo "   Polling every ${POLL_INTERVAL}s (job timeout: 180 min)"
+          POWERCORE_UID=$(id -u powercore 2>/dev/null || echo "")
+          XDG_DIR="/run/user/${POWERCORE_UID}"
+          DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
+
+          # ── helpers ──────────────────────────────────────────────────────────
+
+          # Find the BRequest directory anywhere in the pipeline and return
+          # its path relative to POWERCORE_RUNTIME, e.g.:
+          #   queues/04-shallow-scan/processing/BRequest_20260901_brotlipy_a1b2c3d4
+          #   requests/BRequest_20260901_brotlipy_a1b2c3d4
+          # Returns empty string if not found (mid-transition between dirs).
+          _find_brequest() {
+            # 1. Terminal: bookkeeping completed → runtime/requests/
+            if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+              echo "requests/${BREQUEST}"
+              return
+            fi
+            # 2. In-flight: somewhere inside queues/ (stages 04-07)
+            #    Exact depth: queues/<stage>/<subfolder>/BRequest_* = depth 3
+            sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+              -mindepth 3 -maxdepth 3 -type d -name "${BREQUEST}" 2>/dev/null \
+              | head -1 \
+              | sed "s|${POWERCORE_RUNTIME}/||"
+          }
+
+          # Convert a relative path like "queues/04-shallow-scan/processing/BRequest_..."
+          # into a readable label: "04-shallow-scan / processing"
+          # For the terminal path "requests/BRequest_..." returns "requests ✅"
+          _fmt_location() {
+            local rel="$1"
+            if [[ "$rel" == requests/* ]]; then
+              echo "requests ✅"
+              return
+            fi
+            local stage subfolder
+            stage=$(echo    "$rel" | grep -oP '\d\d-[a-z-]+' | head -1)
+            subfolder=$(echo "$rel" | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
+            if [ -z "$stage" ]; then
+              echo "${rel}"          # fallback: print raw path unchanged
+            elif [ -n "$subfolder" ]; then
+              echo "${stage} / ${subfolder}"
+            else
+              echo "${stage}"
+            fi
+          }
+
+          # Print the last N journal lines for one worker unit
+          _worker_journal() {
+            local stage="$1" lines="${2:-40}"
+            echo "  ── journal: powercore-worker@${stage} (last ${lines} lines) ──"
+            sudo -u powercore \
+              XDG_RUNTIME_DIR="${XDG_DIR}" \
+              DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+              journalctl --user -u "powercore-worker@${stage}.service" \
+                --no-pager -n "${lines}" 2>/dev/null || true
+          }
+
+          # Dump all worker journals — called on failure or timeout
+          _dump_all_journals() {
+            echo "════════════════ Worker journals ════════════════"
+            for s in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+              _worker_journal "$s"
+            done
+            echo "════════════════════════════════════════════════"
+          }
+
+          # Print the workflow.log tail — the single log file all workers share
+          _dump_workflow_log() {
+            local LOG="${POWERCORE_RUNTIME}/logs/workflow.log"
+            if sudo -u powercore test -f "${LOG}" 2>/dev/null; then
+              echo "── workflow.log (last 60 lines) ──"
+              sudo -u powercore tail -n 60 "${LOG}"
+            fi
+          }
+
+          # ── startup banner ───────────────────────────────────────────────────
+          echo "⏳ Tracking BRequest for package : ${PKG_NAME}"
+          echo "   CSV dropped                  : ${CSV_NAME}"
+          echo "   Runtime root                 : ${POWERCORE_RUNTIME}"
+          echo "   Poll interval                : ${POLL_INTERVAL}s"
+          echo "   Soft timeout                 : $((TIMEOUT_SECS / 60)) min"
+          echo "   Worker poll interval         : 30 s (POWERCORE_POLL_INTERVAL default)"
+          echo ""
+
+          # ── Phase 1: wait for 03-preprocess to consume the CSV ───────────────
+          #
+          # What happens (worker.py + adapters/preprocess.py):
+          #   1. Worker picks up CSV from queues/03-preprocess/inbox/
+          #      → renames it to queues/03-preprocess/processing/
+          #   2. preprocess_main() runs and creates BRequest_* dir in runtime/input/
+          #   3. _complete_item() renames it into queues/04-shallow-scan/inbox/
+          #
+          # Therefore we watch for BRequest_* inside queues/ (stages 04+)
+          # AND inside runtime/input/ (transient — created before _complete_item runs).
+          # ─────────────────────────────────────────────────────────────────────
+          echo "── Phase 1: waiting for 03-preprocess to consume CSV and create BRequest ──"
+
+          while [ -z "$BREQUEST" ]; do
+
+            if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
+              echo ""
+              echo "❌ Phase 1 timeout (${ELAPSED}s) — 03-preprocess never created a BRequest"
+              echo "── 03-preprocess inbox ──"
+              sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/" 2>/dev/null || true
+              echo "── 03-preprocess processing ──"
+              sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/" 2>/dev/null || true
+              echo "── runtime/input (where BRequest is created) ──"
+              sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/input/" 2>/dev/null || true
+              _worker_journal "03-preprocess"
+              _dump_workflow_log
+              exit 1
+            fi
+
+            # Search both runtime/input/ (creation point) and queues/04+/inbox/
+            # (destination after _complete_item). -maxdepth 1 for input/ is enough
+            # because BRequest is created directly inside it.
+            FOUND=$(
+              {
+                sudo -u powercore find "${POWERCORE_RUNTIME}/input/" \
+                  -maxdepth 1 -type d -name "BRequest_*${PKG_NAME}*" 2>/dev/null
+                sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+                  -mindepth 3 -maxdepth 3 -type d -name "BRequest_*${PKG_NAME}*" 2>/dev/null
+              } | head -1
+            )
+
+            if [ -n "$FOUND" ]; then
+              BREQUEST=$(basename "$FOUND")
+              REL=$(echo "$FOUND" | sed "s|${POWERCORE_RUNTIME}/||")
+              PREV_LOCATION="$REL"
+              FMT=$(_fmt_location "$REL")
+              echo "[${ELAPSED}s] 📦 BRequest created: ${BREQUEST}"
+              echo "             Location         : ${FMT}"
+              break
+            fi
+
+            # Every 60 s: show CSV status and worker journal while waiting
+            if [ "$(( ELAPSED % 60 ))" -eq 0 ] && [ "${ELAPSED}" -gt 0 ]; then
+              CSV_IN_INBOX="NO"
+              CSV_IN_PROC="NO"
+              sudo -u powercore test -f \
+                "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/${CSV_NAME}" \
+                2>/dev/null && CSV_IN_INBOX="YES"
+              sudo -u powercore test -f \
+                "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/${CSV_NAME}" \
+                2>/dev/null && CSV_IN_PROC="YES"
+              echo "[${ELAPSED}s] Waiting... CSV in inbox=${CSV_IN_INBOX} processing=${CSV_IN_PROC}"
+              _worker_journal "03-preprocess" 20
+            else
+              echo "[${ELAPSED}s] Waiting for 03-preprocess to create BRequest..."
+            fi
+
+            sleep "${POLL_INTERVAL}"
+            ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+          done
+
+          # ── Phase 2: track BRequest from 04-shallow-scan → requests/ ─────────
+          #
+          # Movement (worker.py StageWorker):
+          #   inbox/ ──[_acquire_next_item: atomic lock + rename]──► processing/
+          #   processing/ ──[_complete_item: rename]──► outbox/
+          #   outbox/ ──[_complete_item: rename]──► next-stage/inbox/  (or requests/)
+          #
+          # Shallow-scan routing (adapters/shallow_scan.py:75-94):
+          #   deep_scan_input.csv has rows  → 05-deep-scan
+          #   deep_scan_input.csv empty     → 06-post-process  (05 skipped)
+          #
+          # Error handling (_handle_error, worker.py:259-285):
+          #   Writes BRequest_dir/.error = "ExceptionType: message"
+          #   Renames BRequest back to inbox/ for retry (no permanent failed/ dir).
+          #   The .error file moves with the BRequest into inbox.
+          # ─────────────────────────────────────────────────────────────────────
+          echo ""
+          echo "── Phase 2: tracking ${BREQUEST} through stages ──"
+          echo "   Expected path:"
+          echo "     04-shallow-scan/{inbox→processing→outbox}"
+          echo "     → 05-deep-scan/{inbox→processing→outbox}  (if deep_scan_input.csv has rows)"
+          echo "     → 06-post-process/{inbox→processing→outbox}"
+          echo "     → 07-bookkeeping/{inbox→processing→outbox}"
+          echo "     → requests/  ✅"
           echo ""
 
           while true; do
 
-            # ------------------------------------------------------------------
-            # Phase 1: CSV not yet consumed — wait for BRequest to be created
-            # ------------------------------------------------------------------
-            if [ -z "$BREQUEST" ]; then
-              # The preprocess stage deletes the CSV from inbox and creates a
-              # BRequest_* directory. Find the newest BRequest that contains
-              # the package name.
-              FOUND=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-                -maxdepth 4 -type d -name "BRequest_*${PKG_NAME}*" 2>/dev/null | head -1)
-
-              if [ -n "$FOUND" ]; then
-                BREQUEST=$(basename "$FOUND")
-                echo "📦 BRequest created: ${BREQUEST}"
-              else
-                echo "[${ELAPSED}s] Waiting for preprocess to create BRequest..."
-                sleep $POLL_INTERVAL
-                ELAPSED=$((ELAPSED + POLL_INTERVAL))
-                continue
-              fi
-            fi
-
-            # ------------------------------------------------------------------
-            # Phase 2: BRequest exists — track it through stages
-            # ------------------------------------------------------------------
-
-            # Check 1: pipeline fully complete — final stage moves to requests/
-            if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+            if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
               echo ""
-              echo "✅ Pipeline complete: ${BREQUEST}"
-              echo "   Results: ${POWERCORE_RUNTIME}/requests/${BREQUEST}"
-              exit 0
-            fi
-
-            # Check 2: failure — _handle_error wrote a .error file inside BRequest dir
-            ERROR_FILE=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-              -path "*/${BREQUEST}/.error" 2>/dev/null | head -1)
-            if [ -n "$ERROR_FILE" ]; then
-              echo ""
-              echo "❌ Pipeline failed: ${BREQUEST}"
-              echo "Error details:"
-              sudo -u powercore cat "$ERROR_FILE"
+              echo "❌ Soft timeout (${ELAPSED}s / ${TIMEOUT_SECS}s) — pipeline did not complete"
+              _dump_all_journals
+              _dump_workflow_log
               exit 1
             fi
 
-            # Progress: show which stage the BRequest is currently in
-            CURRENT_PATH=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-              -name "${BREQUEST}" -type d 2>/dev/null | head -1)
-            CURRENT_STAGE=$(echo "$CURRENT_PATH" | grep -oP '\d\d-[a-z-]+(?=/)' | head -1)
-            CURRENT_SUB=$(echo "$CURRENT_PATH" | grep -oP '(?<=queues/)\S+' | head -1)
+            # ── terminal: success ────────────────────────────────────────────
+            # worker.py:254 — bookkeeping adapter returns next_stage=None,
+            # _complete_item moves outbox → runtime/requests/BRequest_*
+            if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+              echo ""
+              echo "✅ [${ELAPSED}s] Pipeline complete"
+              echo "   Final location: ${POWERCORE_RUNTIME}/requests/${BREQUEST}"
+              echo "── Result directory contents ──"
+              sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/requests/${BREQUEST}/" 2>/dev/null || true
+              _dump_workflow_log
+              exit 0
+            fi
 
-            echo "[${ELAPSED}s] Stage: ${CURRENT_STAGE:-unknown} | Location: ${CURRENT_SUB:-not found in queues}"
+            # ── terminal: failure ────────────────────────────────────────────
+            # worker.py:274-276 — _handle_error writes BRequest_dir/.error
+            # then renames the BRequest back to inbox/ for retry.
+            # We detect any .error file anywhere under queues/ (inbox or processing).
+            ERROR_FILE=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+              -name ".error" 2>/dev/null \
+              | grep "/${BREQUEST}/" | head -1)
+            if [ -n "$ERROR_FILE" ]; then
+              echo ""
+              echo "❌ [${ELAPSED}s] Pipeline error detected: ${BREQUEST}"
+              echo "   .error file : ${ERROR_FILE}"
+              echo "── .error contents ──"
+              sudo -u powercore cat "${ERROR_FILE}"
+              echo "── BRequest directory ──"
+              sudo -u powercore ls -lhR "$(dirname "${ERROR_FILE}")" 2>/dev/null || true
+              # Show which stage's worker logged the error
+              CUR_LOC=$(_find_brequest)
+              if [ -n "$CUR_LOC" ]; then
+                ERR_STAGE=$(echo "$CUR_LOC" | grep -oP '\d\d-[a-z-]+' | head -1)
+                [ -n "$ERR_STAGE" ] && _worker_journal "${ERR_STAGE}" 60
+              fi
+              _dump_workflow_log
+              echo ""
+              echo "NOTE: worker.py retries by moving BRequest back to inbox."
+              echo "      If the error persists across retries the job will hang"
+              echo "      until the soft timeout fires."
+              # Do NOT exit 1 here — let the retry mechanism work.
+              # The soft timeout will close the job if it never recovers.
+            fi
 
-            sleep $POLL_INTERVAL
-            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+            # ── locate BRequest ──────────────────────────────────────────────
+            CUR_LOCATION=$(_find_brequest)
+
+            if [ -z "$CUR_LOCATION" ]; then
+              # Transient: BRequest is mid-rename between two directories.
+              # This is normal and very brief. Log once and re-poll immediately.
+              echo "[${ELAPSED}s] 🔄 mid-transition (BRequest between directories)…"
+              sleep 2
+              ELAPSED=$(( ELAPSED + 2 ))
+              continue
+            fi
+
+            # ── log transitions the moment they happen ───────────────────────
+            if [ "${CUR_LOCATION}" != "${PREV_LOCATION}" ]; then
+              PREV_LABEL=$(_fmt_location "${PREV_LOCATION}")
+              CUR_LABEL=$(_fmt_location  "${CUR_LOCATION}")
+              echo "[${ELAPSED}s] 🔀 ${PREV_LABEL}  →  ${CUR_LABEL}"
+              PREV_LOCATION="${CUR_LOCATION}"
+            else
+              CUR_LABEL=$(_fmt_location "${CUR_LOCATION}")
+              echo "[${ELAPSED}s]    ${CUR_LABEL}"
+            fi
+
+            sleep "${POLL_INTERVAL}"
+            ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
           done
-        
+       
