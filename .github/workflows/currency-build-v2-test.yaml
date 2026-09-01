@@ -309,17 +309,37 @@ jobs:
           XDG_RUNTIME_DIR="/run/user/${POWERCORE_UID}"
           DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
 
-          # The service unit's WorkingDirectory and ExecStart reference
-          # %h/runtime/bin/powercore-worker which does not exist in GHA —
-          # powercore-install puts the binary in /usr/local/bin instead.
-          # Override both so systemd can actually launch the workers.
+          # Locate the powercore-worker binary. powercore-install may place it
+          # in /usr/local/bin (system-wide pip install) or in the powercore
+          # user's local bin (~/.local/bin) depending on how the wheels were
+          # installed. Check both and fail early if neither is found.
+          WORKER_BIN=$(sudo -u powercore bash -c '
+            for candidate in \
+              /usr/local/bin/powercore-worker \
+              "${HOME}/.local/bin/powercore-worker" \
+              /usr/bin/powercore-worker; do
+              if [ -x "$candidate" ]; then
+                echo "$candidate"
+                exit 0
+              fi
+            done
+            exit 1
+          ')
+          if [[ -z "$WORKER_BIN" ]]; then
+            echo "❌ powercore-worker binary not found. Searched:"
+            echo "     /usr/local/bin/powercore-worker"
+            echo "     /home/powercore/.local/bin/powercore-worker"
+            echo "     /usr/bin/powercore-worker"
+            echo "Installed packages:"
+            sudo python3.12 -m pip list | grep -i powercore || true
+            sudo -u powercore python3.12 -m pip list | grep -i powercore || true
+            exit 1
+          fi
+          echo "✅ Found powercore-worker at: ${WORKER_BIN}"
+
           SYSTEMD_USER_DIR="/home/powercore/.config/systemd/user"
           sudo -u powercore mkdir -p "${SYSTEMD_USER_DIR}"
 
-          # Write the corrected unit file with printf so all content stays
-          # within the YAML indentation. ExecStart points to /usr/local/bin
-          # where powercore-install places the binary; WorkingDirectory is the
-          # powercore home dir (runtime/bin does not exist in GHA context).
           UNIT_FILE="${SYSTEMD_USER_DIR}/powercore-worker@.service"
           printf '%s\n' \
             '[Unit]' \
@@ -335,8 +355,9 @@ jobs:
             'Environment=POWERCORE_POLL_INTERVAL=30' \
             'Environment=POWERCORE_MAX_OUTBOX_ITEMS=5' \
             'Environment=POWERCORE_MIN_DISK_SPACE_GB=10' \
+            "Environment=PATH=/home/powercore/.local/bin:/usr/local/bin:/usr/bin:/bin" \
             'EnvironmentFile=-/home/powercore/.local/share/powercore/runtime/config/systemd.env' \
-            'ExecStart=/usr/local/bin/powercore-worker %i' \
+            "ExecStart=${WORKER_BIN} %i" \
             'Restart=always' \
             'RestartSec=10' \
             '' \
