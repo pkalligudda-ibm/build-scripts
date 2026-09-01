@@ -607,158 +607,208 @@ jobs:
 
           POLL_INTERVAL=10
           ELAPSED=0
-          TIMEOUT_SECS=10500        # 175 min soft limit — fires before GHA's 180-min hard kill
+          TIMEOUT_SECS=10500
           BREQUEST=""
-          PREV_LOCATION=""          # last known relative path; used to detect transitions
+          PREV_LOCATION=""
+          PREV_STAGE=""
 
           POWERCORE_UID=$(id -u powercore 2>/dev/null || echo "")
           XDG_DIR="/run/user/${POWERCORE_UID}"
           DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
+          WFLOG="${POWERCORE_RUNTIME}/logs/workflow.log"
 
-          # ── helpers ──────────────────────────────────────────────────────────
-
-          # Find the BRequest directory anywhere in the pipeline and return
-          # its path relative to POWERCORE_RUNTIME, e.g.:
-          #   queues/04-shallow-scan/processing/BRequest_20260901_brotlipy-123_a1b2c3d4
-          #   requests/BRequest_20260901_brotlipy-123_a1b2c3d4
-          # Returns empty string if not found (mid-transition between dirs).
-          #
-          # NOTE: $BREQUEST must already be set before calling this function.
-          # The name is looked up by exact match so there are no false positives
-          # even when multiple jobs run concurrently.
+          # ── _find_brequest ───────────────────────────────────────────────────
+          # Returns the BRequest path relative to POWERCORE_RUNTIME.
+          # Searches: requests/ (done), then queues/ (in-flight).
           _find_brequest() {
-            # 1. Terminal: bookkeeping completed → runtime/requests/
             if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
-              echo "requests/${BREQUEST}"
-              return
+              echo "requests/${BREQUEST}"; return
             fi
-            # 2. In-flight: somewhere inside queues/ (stages 04-07)
-            #    Exact depth: queues/<stage>/<subfolder>/BRequest_* = depth 3
             sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
               -mindepth 3 -maxdepth 3 -type d -name "${BREQUEST}" 2>/dev/null \
-              | head -1 \
-              | sed "s|${POWERCORE_RUNTIME}/||"
+              | head -1 | sed "s|${POWERCORE_RUNTIME}/||"
           }
 
-          # Convert a relative path like "queues/04-shallow-scan/processing/BRequest_..."
-          # into a readable label: "04-shallow-scan / processing"
-          # For the terminal path "requests/BRequest_..." returns "requests ✅"
+          # ── _fmt_location ────────────────────────────────────────────────────
+          # Converts a relative BRequest path into a human-readable label.
           _fmt_location() {
             local rel="$1"
-            if [[ "$rel" == requests/* ]]; then
-              echo "requests ✅"
-              return
-            fi
-            local stage subfolder
-            stage=$(echo    "$rel" | grep -oP '\d\d-[a-z-]+' | head -1)
+            [[ "$rel" == requests/* ]] && { echo "DONE"; return; }
+            local stage subfolder label
+            stage=$(echo "$rel"     | grep -oP '\d\d-[a-z-]+' | head -1)
             subfolder=$(echo "$rel" | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
-            if [ -z "$stage" ]; then
-              echo "${rel}"          # fallback: print raw path unchanged
-            elif [ -n "$subfolder" ]; then
-              echo "${stage} / ${subfolder}"
-            else
-              echo "${stage}"
-            fi
+            case "$stage" in
+              03-preprocess)   label="Stage 1/5  Pre-process"   ;;
+              04-shallow-scan) label="Stage 2/5  Shallow Scan"  ;;
+              05-deep-scan)    label="Stage 3/5  Deep Scan"     ;;
+              06-post-process) label="Stage 4/5  Post-Process"  ;;
+              07-bookkeeping)  label="Stage 5/5  Bookkeeping"   ;;
+              *)               label="${stage:-${rel}}"         ;;
+            esac
+            case "$subfolder" in
+              inbox)      label="${label}  [queued]"    ;;
+              processing) label="${label}  [running]"   ;;
+              outbox)     label="${label}  [done]"      ;;
+            esac
+            echo "${label}"
           }
 
-          # Print the last N journal lines for one worker unit
+          # ── _worker_journal ──────────────────────────────────────────────────
           _worker_journal() {
             local stage="$1" lines="${2:-40}"
-            echo "  ── journal: powercore-worker@${stage} (last ${lines} lines) ──"
+            echo "  journal: powercore-worker@${stage} (last ${lines} lines)"
             sudo -u powercore \
-              XDG_RUNTIME_DIR="${XDG_DIR}" \
-              DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+              XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
               journalctl --user -u "powercore-worker@${stage}.service" \
                 --no-pager -n "${lines}" 2>/dev/null || true
           }
 
-          # Dump all worker journals — called on failure or timeout
           _dump_all_journals() {
-            echo "════════════════ Worker journals ════════════════"
+            echo "========== Worker journals =========="
             for s in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
               _worker_journal "$s"
             done
-            echo "════════════════════════════════════════════════"
           }
 
-          # Print the workflow.log tail — the single log file all workers share
-          _dump_workflow_log() {
-            local LOG="${POWERCORE_RUNTIME}/logs/workflow.log"
-            if sudo -u powercore test -f "${LOG}" 2>/dev/null; then
-              echo "── workflow.log (last 60 lines) ──"
-              sudo -u powercore tail -n 60 "${LOG}"
+          # ── _section_header ──────────────────────────────────────────────────
+          # Print a bold section banner whenever we enter a new pipeline stage.
+          _section_header() {
+            local stage="$1" elapsed_min="$2" elapsed_sec="$3"
+            echo ""
+            echo "============================================================"
+            case "$stage" in
+              04-shallow-scan) echo "  Stage 2/5 — Shallow Scan  [${elapsed_min}m${elapsed_sec}s]" ;;
+              05-deep-scan)    echo "  Stage 3/5 — Deep Scan     [${elapsed_min}m${elapsed_sec}s]" ;;
+              06-post-process) echo "  Stage 4/5 — Post-Process  [${elapsed_min}m${elapsed_sec}s]" ;;
+              07-bookkeeping)  echo "  Stage 5/5 — Bookkeeping   [${elapsed_min}m${elapsed_sec}s]" ;;
+            esac
+            echo "============================================================"
+          }
+
+          # ── _print_shallow_summary ───────────────────────────────────────────
+          # Reads shallow_scan_metadata.json (written by shallow_scan.py:300-354)
+          # and prints the categorisation counts + reduction %.
+          # Fields: statistics.{satisfied,failed_known,noarch_unverified,rebuild,
+          #           new,lang_ver_unavailable,pass_to_deep_scan,reduction_pct}
+          #         duration_seconds
+          _print_shallow_summary() {
+            local brequest_dir="$1"
+            local meta
+            meta=$(sudo -u powercore find "${brequest_dir}" \
+              -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
+            [ -z "$meta" ] && return
+            local _py; _py=$(mktemp /tmp/pc_ss_XXXXXX.py)
+            echo aW1wb3J0IGpzb24sIHN5cwpmID0gc3lzLmFyZ3ZbMV0KdHJ5OgogICAgZCA9IGpzb24ubG9hZChvcGVuKGYpKQogICAgcyA9IGQuZ2V0KCdzdGF0aXN0aWNzJywge30pCiAgICB0b3RhbCA9IHN1bShzLmdldChrLDApIGZvciBrIGluIFsnc2F0aXNmaWVkJywnZmFpbGVkX2tub3duJywnbm9hcmNoX3VudmVyaWZpZWQnLCdyZWJ1aWxkJywnbmV3JywnbGFuZ192ZXJfdW5hdmFpbGFibGUnXSkKICAgIGR1ciA9IGQuZ2V0KCdkdXJhdGlvbl9zZWNvbmRzJywgMCkKICAgIHByaW50KCcgIFNoYWxsb3cgU2NhbiBTdW1tYXJ5JykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgVG90YWwgdGFza3MgICAgICAgIDonLCB0b3RhbCkKICAgIHByaW50KCcgIFNBVElTRklFRCAgICAgICAgICA6Jywgcy5nZXQoJ3NhdGlzZmllZCcsMCkpCiAgICBwcmludCgnICBGQUlMRURfS05PV04gICAgICAgOicsIHMuZ2V0KCdmYWlsZWRfa25vd24nLDApKQogICAgcHJpbnQoJyAgTk9BUkNIX1VOVkVSSUZJRUQgIDonLCBzLmdldCgnbm9hcmNoX3VudmVyaWZpZWQnLDApKQogICAgcHJpbnQoJyAgUkVCVUlMRCAgICAgICAgICAgIDonLCBzLmdldCgncmVidWlsZCcsMCkpCiAgICBwcmludCgnICBORVcgICAgICAgICAgICAgICAgOicsIHMuZ2V0KCduZXcnLDApKQogICAgcHJpbnQoJyAgTEFOR19WRVJfVU5BVkFJTCAgIDonLCBzLmdldCgnbGFuZ192ZXJfdW5hdmFpbGFibGUnLDApKQogICAgcHJpbnQoJyAgUGFzcyB0byBEZWVwIFNjYW4gIDonLCBzLmdldCgncGFzc190b19kZWVwX3NjYW4nLDApKQogICAgcHJpbnQoJyAgUmVkdWN0aW9uICAgICAgICAgIDonLCBzdHIocy5nZXQoJ3JlZHVjdGlvbl9wY3QnLDApKSsnJScpCiAgICBwcmludCgnICBEdXJhdGlvbiAgICAgICAgICAgOicsIHN0cihyb3VuZChkdXIsMikpKydzJykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgTmV4dCBzdGFnZSAgICAgICAgIDonLCBkLmdldCgnbmV4dF9zdGFnZScsJ3Vua25vd24nKSkKZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoJyAgKGNvdWxkIG5vdCBwYXJzZSBzaGFsbG93X3NjYW5fbWV0YWRhdGEuanNvbjonLCBlKQo= \
+              | base64 -d > "${_py}"
+            sudo -u powercore python3 "${_py}" "${meta}" 2>/dev/null || true
+            rm -f "${_py}"
+          }
+
+          # ── _print_deep_scan_summary ─────────────────────────────────────────
+          # Reads the batch-mode final line from workflow.log written by
+          # progress_reporter.py final_summary() (non-interactive path):
+          #   "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
+          # Falls back to run_core.py log lines:
+          #   "Successful: N" / "Failed: N" / "Success rate: X%"
+          _print_deep_scan_summary() {
+            [ ! -f "${WFLOG}" ] && return
+            local done_line
+            done_line=$(sudo -u powercore grep -a "DONE" "${WFLOG}" 2>/dev/null \
+              | grep -a "elapsed=" | tail -1)
+            if [ -n "$done_line" ]; then
+              echo "  Deep Scan Summary"
+              echo "  ----------------------------------------"
+              echo "  ${done_line}"
+              echo "  ----------------------------------------"
+            else
+              # Fallback: parse individual log lines from run_core._print_summary()
+              local total success failed rate
+              total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+')
+              success=$(sudo -u powercore grep -a "Successful:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+')
+              failed=$(sudo -u powercore grep -a "^.*Failed: \d" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '\d+$')
+              rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null | tail -1 | grep -oP '[\d.]+%')
+              if [ -n "$total" ]; then
+                echo "  Deep Scan Summary"
+                echo "  ----------------------------------------"
+                echo "  Total     : ${total}"
+                echo "  Succeeded : ${success:-?}"
+                echo "  Failed    : ${failed:-?}"
+                echo "  Rate      : ${rate:-?}"
+                echo "  ----------------------------------------"
+              fi
             fi
           }
 
-          # ── startup banner ───────────────────────────────────────────────────
-          echo "⏳ Tracking BRequest for package : ${PKG_NAME}"
-          echo "   CSV dropped                  : ${CSV_NAME}"
-          echo "   Runtime root                 : ${POWERCORE_RUNTIME}"
-          echo "   Poll interval                : ${POLL_INTERVAL}s"
-          echo "   Soft timeout                 : $((TIMEOUT_SECS / 60)) min"
-          echo "   Worker poll interval         : 30 s (POWERCORE_POLL_INTERVAL default)"
+          # ── _print_postprocess_summary ───────────────────────────────────────
+          # Reads post_process_summary.json (models.py totals keys):
+          #   total_packages, build_success, build_success_unverified,
+          #   install_fail, build_fail, test_fail, timeout, partial
+          _print_postprocess_summary() {
+            local pp="$1/post_process_summary.json"
+            sudo -u powercore test -f "${pp}" 2>/dev/null || return
+            local _py; _py=$(mktemp /tmp/pc_pp_XXXXXX.py)
+            echo aW1wb3J0IGpzb24sIHN5cwpmID0gc3lzLmFyZ3ZbMV0KdHJ5OgogICAgZCA9IGpzb24ubG9hZChvcGVuKGYpKQogICAgdCA9IGQuZ2V0KCd0b3RhbHMnLCB7fSkKICAgIHByaW50KCcgIFBvc3QtUHJvY2VzcyBTdW1tYXJ5JykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQogICAgcHJpbnQoJyAgQXJjaGl0ZWN0dXJlICAgICAgIDonLCBkLmdldCgnYXJjaGl0ZWN0dXJlJywndW5rbm93bicpKQogICAgcHJpbnQoJyAgUGFja2FnZXMgc3VibWl0dGVkIDonLCB0LmdldCgndG90YWxfcGFja2FnZXMnLCdOL0EnKSkKICAgIG9rICA9IHQuZ2V0KCdidWlsZF9zdWNjZXNzJywgMCkKICAgIG9rdSA9IHQuZ2V0KCdidWlsZF9zdWNjZXNzX3VudmVyaWZpZWQnLCAwKQogICAgaWYgb2sgID4gMDogcHJpbnQoJyAgQnVpbGQgc3VjY2VzcyAgICAgIDonLCBvaykKICAgIGlmIG9rdSA+IDA6IHByaW50KCcgIEJ1aWxkIHN1Y2Nlc3MgKFVWKSA6Jywgb2t1KQogICAgZm9yIGssbCBpbiBbKCdidWlsZF9mYWlsJywnQnVpbGQgZmFpbHVyZXMnKSwoJ2luc3RhbGxfZmFpbCcsJ0luc3RhbGwgZmFpbHVyZXMnKSwoJ3Rlc3RfZmFpbCcsJ1Rlc3QgZmFpbHVyZXMnKSwoJ3RpbWVvdXQnLCdUaW1lb3V0cycpLCgncGFydGlhbCcsJ1BhcnRpYWwnKV06CiAgICAgICAgdiA9IHQuZ2V0KGssIDApCiAgICAgICAgaWYgdiA+IDA6IHByaW50KCcgJywgbC5sanVzdCgxOSksICc6JywgdikKICAgIGlmIG9rICsgb2t1ID09IDAgYW5kIHQuZ2V0KCd0b3RhbF9wYWNrYWdlcycsIDApID4gMDoKICAgICAgICBwcmludCgpCiAgICAgICAgcHJpbnQoJyAgTk9URTogMCBidWlsZHMgLSBwYWNrYWdlcyBhbHJlYWR5IFNBVElTRklFRCBpbiBjYXRhbG9nJykKICAgIHByaW50KCcgIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0nKQpleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICBwcmludCgnICAoY291bGQgbm90IHBhcnNlIHBvc3RfcHJvY2Vzc19zdW1tYXJ5Lmpzb246JywgZSkK \
+              | base64 -d > "${_py}"
+            sudo -u powercore python3 "${_py}" "${pp}" 2>/dev/null || true
+            rm -f "${_py}"
+          }
+
+          # ── _print_shallow_csv ───────────────────────────────────────────────
+          _print_shallow_csv() {
+            local csv_path="$1"
+            [ -z "$csv_path" ] && return
+            local _py; _py=$(mktemp /tmp/pc_scsv_XXXXXX.py)
+            echo aW1wb3J0IGNzdiwgc3lzCmYgPSBzeXMuYXJndlsxXQp0cnk6CiAgICByb3dzID0gbGlzdChjc3YuRGljdFJlYWRlcihvcGVuKGYsIGVuY29kaW5nPSd1dGYtOC1zaWcnKSkpCiAgICBpZiBub3Qgcm93czoKICAgICAgICBwcmludCgnICAoZW1wdHkpJykKICAgIGVsc2U6CiAgICAgICAgZm9yIHIgaW4gcm93czoKICAgICAgICAgICAgbmFtZSAgID0gci5nZXQoJ3BhY2thZ2VfbmFtZScpIG9yIHIuZ2V0KCduYW1lJywgJz8nKQogICAgICAgICAgICB2ZXIgICAgPSByLmdldCgncGFja2FnZV92ZXJzaW9uJykgb3Igci5nZXQoJ3ZlcnNpb24nLCAnPycpCiAgICAgICAgICAgIHN0YXR1cyA9IHIuZ2V0KCdzaGFsbG93X3N0YXR1cycsICc/JykKICAgICAgICAgICAgZGVlcCAgID0gci5nZXQoJ25lZWRzX2RlZXBfc2NhbicsICc/JykKICAgICAgICAgICAgbm90ZXMgID0gci5nZXQoJ3NoYWxsb3dfbm90ZXMnLCAnJykKICAgICAgICAgICAgdGFnID0gJ1NBVElTRklFRCcgaWYgc3RhdHVzID09ICdTQVRJU0ZJRUQnIGVsc2UgKCdORUVEUyBCVUlMRCcgaWYgZGVlcCA9PSAndHJ1ZScgZWxzZSBzdGF0dXMpCiAgICAgICAgICAgIHByaW50KCcgIFsnK3RhZysnXSAgJytuYW1lKycgICcrdmVyKQogICAgICAgICAgICBpZiBub3RlczoKICAgICAgICAgICAgICAgIHByaW50KCcgICAgICAgICAgICAgJytub3RlcykKZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgcHJpbnQoJyAgKGNvdWxkIG5vdCBwYXJzZTonLCBlKQo= \
+              | base64 -d > "${_py}"
+            sudo -u powercore python3 "${_py}" "${csv_path}" 2>/dev/null || true
+            rm -f "${_py}"
+          }
+
+          # ════════════════════════════════════════════════════════════════════
+          # STARTUP BANNER
+          # ════════════════════════════════════════════════════════════════════
+          echo "============================================================"
+          echo "  PowerCore Pipeline Monitor"
+          echo "============================================================"
+          echo "  Package      : ${PKG_NAME}"
+          echo "  CSV file     : ${CSV_NAME}"
+          echo "  Runtime      : ${POWERCORE_RUNTIME}"
+          echo "  Poll interval: ${POLL_INTERVAL}s  |  Soft timeout: $((TIMEOUT_SECS/60))min"
+          echo "============================================================"
           echo ""
 
-          # ── Phase 1: wait for 03-preprocess to consume the CSV ───────────────
-          #
-          # What happens (worker.py + adapters/preprocess.py):
-          #   1. Worker picks up CSV from queues/03-preprocess/inbox/
-          #      → renames it to queues/03-preprocess/processing/
-          #   2. preprocess_main() runs:
-          #      - generate_task_id() uses CSV stem as part of the name:
-          #          BRequest_{date}_{csv_stem}_{uuid8}
-          #          e.g. BRequest_20260901_brotlipy-33516010027_a1b2c3d4
-          #      - Creates the BRequest dir at runtime_config.input_dir
-          #        which resolves to $POWERCORE_RUNTIME/input/ by default,
-          #        BUT if POWERCORE_RUNTIME env var is set to the runtime root,
-          #        the dir may appear directly under $POWERCORE_RUNTIME/.
-          #   3. _complete_item() renames BRequest → queues/04-shallow-scan/inbox/
-          #
-          # Search strategy (no package-name filter — BRequest name comes from
-          # CSV stem, not package name):
-          #   1. runtime/input/   — default POWERCORE_INPUT path
-          #   2. runtime/ root    — fallback if POWERCORE_INPUT == POWERCORE_RUNTIME
-          #   3. queues/04+/      — already handed off before we poll
-          # ─────────────────────────────────────────────────────────────────────
-          # Derive the expected CSV stem (sanitized the same way generate_task_id does)
+          # ════════════════════════════════════════════════════════════════════
+          # STAGE 1/5 — PRE-PROCESS
+          # Wait for 03-preprocess to consume the CSV and create a BRequest dir.
+          # BRequest name = BRequest_{date}_{csv_stem}_{uuid8}  (generate_task_id)
+          # BRequest created in runtime/input/ or runtime/ root (config-dependent).
+          # ════════════════════════════════════════════════════════════════════
           CSV_STEM="${CSV_NAME%.csv}"
           CSV_STEM_SAFE=$(echo "${CSV_STEM}" | tr -c 'a-zA-Z0-9_-' '_')
 
-          echo "── Phase 1: waiting for 03-preprocess to consume CSV and create BRequest ──"
-          echo "   Watching for BRequest_*${CSV_STEM_SAFE}* or any BRequest_* in runtime paths"
+          echo "------------------------------------------------------------"
+          echo "  Stage 1/5  Pre-process  [waiting for BRequest creation]"
+          echo "------------------------------------------------------------"
 
           while [ -z "$BREQUEST" ]; do
-
             if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
-              echo ""
-              echo "❌ Phase 1 timeout (${ELAPSED}s) — 03-preprocess never created a BRequest"
-              echo "── 03-preprocess inbox ──"
+              echo "TIMEOUT (${ELAPSED}s) — Pre-process never created a BRequest"
+              echo "  03-preprocess/inbox:"
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/" 2>/dev/null || true
-              echo "── 03-preprocess processing ──"
+              echo "  03-preprocess/processing:"
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/" 2>/dev/null || true
-              echo "── runtime/input/ (default POWERCORE_INPUT location) ──"
+              echo "  runtime/input/:"
               sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/input/" 2>/dev/null || true
-              echo "── runtime/ root (fallback BRequest location) ──"
-              sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null || true
               _worker_journal "03-preprocess"
-              _dump_workflow_log
               exit 1
             fi
 
-            # Search all three possible BRequest creation locations.
-            # No package-name filter: BRequest name = BRequest_{date}_{csv_stem}_{uuid8}
-            # where csv_stem comes from the CSV filename, not the package name.
             FOUND=$(
               {
-                # 1. Default: runtime/input/  (POWERCORE_INPUT default)
                 sudo -u powercore find "${POWERCORE_RUNTIME}/input/" \
                   -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
-                # 2. Runtime root fallback: BRequest created directly under runtime/
-                #    (happens when POWERCORE_RUNTIME env is set to the runtime root
-                #     and POWERCORE_INPUT is not separately configured)
                 sudo -u powercore find "${POWERCORE_RUNTIME}" \
                   -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
-                # 3. Already in queues: handed off to 04-shallow-scan before we polled
                 sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
                   -mindepth 3 -maxdepth 3 -type d -name "BRequest_*" 2>/dev/null
               } | head -1
@@ -768,132 +818,163 @@ jobs:
               BREQUEST=$(basename "$FOUND")
               REL=$(echo "$FOUND" | sed "s|${POWERCORE_RUNTIME}/||")
               PREV_LOCATION="$REL"
-              FMT=$(_fmt_location "$REL")
-              echo "[${ELAPSED}s] 📦 BRequest created: ${BREQUEST}"
-              echo "             Location         : ${FMT}"
+              ELAPSED_MIN=$(( ELAPSED / 60 ))
+              ELAPSED_SEC=$(( ELAPSED % 60 ))
+              echo ""
+              echo "  BRequest created: ${BREQUEST}  [${ELAPSED_MIN}m${ELAPSED_SEC}s]"
+              echo "  Starting location: $(_fmt_location "${REL}")"
+              echo ""
+
+              # Print preprocess log lines from workflow.log
+              if sudo -u powercore test -f "${WFLOG}" 2>/dev/null; then
+                echo "  Pre-process log (last 10 lines):"
+                sudo -u powercore grep -a "03-preprocess\|preprocess\|BRequest" "${WFLOG}" 2>/dev/null \
+                  | tail -10 | sed 's/^/    /' || true
+                echo ""
+              fi
               break
             fi
 
-            # Every 60 s: show CSV status and worker journal while waiting
             if [ "$(( ELAPSED % 60 ))" -eq 0 ] && [ "${ELAPSED}" -gt 0 ]; then
-              CSV_IN_INBOX="NO"
-              CSV_IN_PROC="NO"
+              CSV_IN_INBOX="NO"; CSV_IN_PROC="NO"
               sudo -u powercore test -f \
                 "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/${CSV_NAME}" \
                 2>/dev/null && CSV_IN_INBOX="YES"
               sudo -u powercore test -f \
                 "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/${CSV_NAME}" \
                 2>/dev/null && CSV_IN_PROC="YES"
-              echo "[${ELAPSED}s] Waiting... CSV in inbox=${CSV_IN_INBOX} processing=${CSV_IN_PROC}"
-              _worker_journal "03-preprocess" 20
+              ELAPSED_MIN=$(( ELAPSED / 60 ))
+              echo "  [${ELAPSED_MIN}m] Waiting... CSV in inbox=${CSV_IN_INBOX} processing=${CSV_IN_PROC}"
+              _worker_journal "03-preprocess" 10
             else
-              echo "[${ELAPSED}s] Waiting for 03-preprocess to create BRequest..."
+              echo "  [${ELAPSED}s] Waiting for Pre-process to create BRequest..."
             fi
-
             sleep "${POLL_INTERVAL}"
             ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
           done
 
-          # ── Phase 2: track BRequest from 04-shallow-scan → requests/ ─────────
-          #
-          # Movement (worker.py StageWorker):
-          #   inbox/ ──[_acquire_next_item: atomic lock + rename]──► processing/
-          #   processing/ ──[_complete_item: rename]──► outbox/
-          #   outbox/ ──[_complete_item: rename]──► next-stage/inbox/  (or requests/)
-          #
-          # Shallow-scan routing (adapters/shallow_scan.py:75-94):
-          #   deep_scan_input.csv has rows  → 05-deep-scan
-          #   deep_scan_input.csv empty     → 06-post-process  (05 skipped)
-          #
-          # Error handling (_handle_error, worker.py:259-285):
-          #   Writes BRequest_dir/.error = "ExceptionType: message"
-          #   Renames BRequest back to inbox/ for retry (no permanent failed/ dir).
-          #   The .error file moves with the BRequest into inbox.
-          # ─────────────────────────────────────────────────────────────────────
-          echo ""
-          echo "── Phase 2: tracking ${BREQUEST} through stages ──"
-          echo "   Expected path:"
-          echo "     04-shallow-scan/{inbox→processing→outbox}"
-          echo "     → 05-deep-scan/{inbox→processing→outbox}  (if deep_scan_input.csv has rows)"
-          echo "     → 06-post-process/{inbox→processing→outbox}"
-          echo "     → 07-bookkeeping/{inbox→processing→outbox}"
-          echo "     → requests/  ✅"
-          echo ""
-
+          # ════════════════════════════════════════════════════════════════════
+          # STAGE 2–5: Track BRequest through the remaining pipeline stages
+          # ════════════════════════════════════════════════════════════════════
           while true; do
-
             if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
               echo ""
-              echo "❌ Soft timeout (${ELAPSED}s / ${TIMEOUT_SECS}s) — pipeline did not complete"
+              echo "TIMEOUT (${ELAPSED}s) — pipeline did not complete in time"
               _dump_all_journals
-              _dump_workflow_log
               exit 1
             fi
 
-            # ── terminal: success ────────────────────────────────────────────
-            # worker.py:254 — bookkeeping adapter returns next_stage=None,
-            # _complete_item moves outbox → runtime/requests/BRequest_*
+            # ── SUCCESS ──────────────────────────────────────────────────────
             if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+              RESULT_DIR="${POWERCORE_RUNTIME}/requests/${BREQUEST}"
+              ELAPSED_MIN=$(( ELAPSED / 60 ))
+              ELAPSED_SEC=$(( ELAPSED % 60 ))
+
               echo ""
-              echo "✅ [${ELAPSED}s] Pipeline complete"
-              echo "   Final location: ${POWERCORE_RUNTIME}/requests/${BREQUEST}"
-              echo "── Result directory contents ──"
-              sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/requests/${BREQUEST}/" 2>/dev/null || true
-              _dump_workflow_log
+              echo "============================================================"
+              echo "  PIPELINE COMPLETE  [${ELAPSED_MIN}m${ELAPSED_SEC}s total]"
+              echo "============================================================"
+              echo "  Package   : ${PKG_NAME}"
+              echo "  BRequest  : ${BREQUEST}"
+              echo "  Result    : ${RESULT_DIR}"
+              echo ""
+
+              # ── Post-process summary ────────────────────────────────────
+              _print_postprocess_summary "${RESULT_DIR}"
+              echo ""
+
+              # ── Shallow scan per-package status ─────────────────────────
+              SHALLOW_CSV=$(sudo -u powercore find "${RESULT_DIR}" \
+                -maxdepth 1 -name "*shallow_results.csv" 2>/dev/null | head -1)
+              if [ -n "$SHALLOW_CSV" ]; then
+                echo "  Shallow Scan — Per-Package Status"
+                echo "  ----------------------------------------"
+                _print_shallow_csv "${SHALLOW_CSV}"
+                echo ""
+              fi
+
+              # ── Output files ─────────────────────────────────────────────
+              OUTPUT_DIR="${RESULT_DIR}/output"
+              if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
+                echo "  Output Files"
+                echo "  ----------------------------------------"
+                sudo -u powercore find "${OUTPUT_DIR}" -type f | sort | while read -r f; do
+                  SIZE=$(sudo -u powercore du -sh "$f" 2>/dev/null | cut -f1)
+                  printf "  %-8s  %s\n" "${SIZE}" "${f#${RESULT_DIR}/}"
+                done
+                echo ""
+              fi
+
+              echo "============================================================"
               exit 0
             fi
 
-            # ── terminal: failure ────────────────────────────────────────────
-            # worker.py:274-276 — _handle_error writes BRequest_dir/.error
-            # then renames the BRequest back to inbox/ for retry.
-            # We detect any .error file anywhere under queues/ (inbox or processing).
+            # ── ERROR ────────────────────────────────────────────────────────
             ERROR_FILE=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
-              -name ".error" 2>/dev/null \
-              | grep "/${BREQUEST}/" | head -1)
+              -name ".error" 2>/dev/null | grep "/${BREQUEST}/" | head -1)
             if [ -n "$ERROR_FILE" ]; then
               echo ""
-              echo "❌ [${ELAPSED}s] Pipeline error detected: ${BREQUEST}"
-              echo "   .error file : ${ERROR_FILE}"
-              echo "── .error contents ──"
-              sudo -u powercore cat "${ERROR_FILE}"
-              echo "── BRequest directory ──"
-              sudo -u powercore ls -lhR "$(dirname "${ERROR_FILE}")" 2>/dev/null || true
-              # Show which stage's worker logged the error
+              echo "  ERROR detected in ${BREQUEST}"
+              echo "  .error: ${ERROR_FILE}"
+              sudo -u powercore cat "${ERROR_FILE}" | sed 's/^/  /'
               CUR_LOC=$(_find_brequest)
-              if [ -n "$CUR_LOC" ]; then
-                ERR_STAGE=$(echo "$CUR_LOC" | grep -oP '\d\d-[a-z-]+' | head -1)
-                [ -n "$ERR_STAGE" ] && _worker_journal "${ERR_STAGE}" 60
-              fi
-              _dump_workflow_log
-              echo ""
-              echo "NOTE: worker.py retries by moving BRequest back to inbox."
-              echo "      If the error persists across retries the job will hang"
-              echo "      until the soft timeout fires."
-              # Do NOT exit 1 here — let the retry mechanism work.
-              # The soft timeout will close the job if it never recovers.
+              ERR_STAGE=$(echo "$CUR_LOC" | grep -oP '\d\d-[a-z-]+' | head -1)
+              [ -n "$ERR_STAGE" ] && _worker_journal "${ERR_STAGE}" 30
+              echo "  (worker will retry — waiting for recovery or timeout)"
             fi
 
-            # ── locate BRequest ──────────────────────────────────────────────
+            # ── LOCATE ───────────────────────────────────────────────────────
             CUR_LOCATION=$(_find_brequest)
-
             if [ -z "$CUR_LOCATION" ]; then
-              # Transient: BRequest is mid-rename between two directories.
-              # This is normal and very brief. Log once and re-poll immediately.
-              echo "[${ELAPSED}s] 🔄 mid-transition (BRequest between directories)…"
-              sleep 2
-              ELAPSED=$(( ELAPSED + 2 ))
-              continue
+              sleep 2; ELAPSED=$(( ELAPSED + 2 )); continue
             fi
 
-            # ── log transitions the moment they happen ───────────────────────
+            # ── TRANSITION ───────────────────────────────────────────────────
             if [ "${CUR_LOCATION}" != "${PREV_LOCATION}" ]; then
-              PREV_LABEL=$(_fmt_location "${PREV_LOCATION}")
-              CUR_LABEL=$(_fmt_location  "${CUR_LOCATION}")
-              echo "[${ELAPSED}s] 🔀 ${PREV_LABEL}  →  ${CUR_LABEL}"
+              CUR_STAGE=$(echo "$CUR_LOCATION" | grep -oP '\d\d-[a-z-]+' | head -1)
+              CUR_SUB=$(echo "$CUR_LOCATION"   | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
+              ELAPSED_MIN=$(( ELAPSED / 60 ))
+              ELAPSED_SEC=$(( ELAPSED % 60 ))
+
+              # Print section header when entering a new stage for the first time
+              if [ "${CUR_STAGE}" != "${PREV_STAGE}" ] && [ -n "${CUR_STAGE}" ]; then
+                _section_header "${CUR_STAGE}" "${ELAPSED_MIN}" "${ELAPSED_SEC}"
+
+                # Print per-stage summary when leaving a stage
+                case "${PREV_STAGE}" in
+                  04-shallow-scan)
+                    # BRequest just moved out of shallow-scan → print shallow summary
+                    PREV_BREQ_DIR="${POWERCORE_RUNTIME}/queues/${PREV_STAGE}/outbox/${BREQUEST}"
+                    # may already be gone; search all subfolders of the stage
+                    BREQ_SEARCH=$(sudo -u powercore find \
+                      "${POWERCORE_RUNTIME}/queues/${PREV_STAGE}" \
+                      -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
+                    if [ -n "$BREQ_SEARCH" ]; then
+                      _print_shallow_summary "$(dirname "$BREQ_SEARCH")"
+                    else
+                      # Check if it's already in the current stage dir
+                      _print_shallow_summary \
+                        "${POWERCORE_RUNTIME}/queues/${CUR_STAGE}/${CUR_SUB:-inbox}/${BREQUEST}"
+                    fi
+                    echo ""
+                    ;;
+                  05-deep-scan)
+                    _print_deep_scan_summary
+                    echo ""
+                    ;;
+                esac
+
+                PREV_STAGE="${CUR_STAGE}"
+              fi
+
+              echo "  [${ELAPSED_MIN}m${ELAPSED_SEC}s]  $(_fmt_location "${CUR_LOCATION}")"
               PREV_LOCATION="${CUR_LOCATION}"
             else
-              CUR_LABEL=$(_fmt_location "${CUR_LOCATION}")
-              echo "[${ELAPSED}s]    ${CUR_LABEL}"
+              # Heartbeat every 60 s
+              if [ "$(( ELAPSED % 60 ))" -eq 0 ] && [ "${ELAPSED}" -gt 0 ]; then
+                ELAPSED_MIN=$(( ELAPSED / 60 ))
+                echo "  ... [${ELAPSED_MIN}m]  $(_fmt_location "${CUR_LOCATION}")"
+              fi
             fi
 
             sleep "${POLL_INTERVAL}"
