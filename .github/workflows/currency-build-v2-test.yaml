@@ -1,282 +1,282 @@
 name: Currency Build V2 Test
 on:
-workflow_dispatch:
-inputs:
-package_json:
-description: >
-         Package data as a JSON object. Example:
-         {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":""}
-       required: true
-type: string
-validate_build_script_v2:
-description: 'Run v2 build script via powercore'
-required: true
-default: 'false'
-type: choice
-options:
-- 'false'
-- 'true'
-wheel_build:
-description: 'Create wheel for all Python versions via powercore'
-required: true
-default: 'false'
-type: choice
-options:
-- 'false'
-- 'true'
-build_docker:
-description: 'Build docker image'
-required: true
-default: 'false'
-type: choice
-options:
-- 'false'
-- 'true'
-powercore_version:
-description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
-required: true
-type: string
-large-runner-label:
-description: 'Larger runner to use for resource-heavy builds'
-required: false
-type: choice
-options:
-- ''
-- ubuntu-24.04-ppc64le-2xlarge-p10
-- ubuntu-24.04-ppc64le-4xlarge-p10
+  workflow_dispatch:
+    inputs:
+      package_json:
+        description: >
+          Package data as a JSON object. Example:
+          {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":""}
+        required: true
+        type: string
+      validate_build_script_v2:
+        description: 'Run v2 build script via powercore'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      wheel_build:
+        description: 'Create wheel for all Python versions via powercore'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      build_docker:
+        description: 'Build docker image'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      powercore_version:
+        description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
+        required: true
+        type: string
+      large-runner-label:
+        description: 'Larger runner to use for resource-heavy builds'
+        required: false
+        type: choice
+        options:
+          - ''
+          - ubuntu-24.04-ppc64le-2xlarge-p10
+          - ubuntu-24.04-ppc64le-4xlarge-p10
 
 run-name: >
- ${{ inputs.large-runner-label != '' &&
-     format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
-     format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
- }}
+  ${{ inputs.large-runner-label != '' &&
+      format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
+      format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
+  }}
 
 jobs:
-# ---------------------------------------------------------------------------
-# build_info: Parses the package_json input, validates required fields, and
-# writes variable.sh — a sourceable shell file uploaded as an artifact so
-# every downstream job can download it and source it directly.
-#
-# Variables written to variable.sh:
-#   PACKAGE_NAME             — from package_json.package_name
-#   PACKAGE_VERSION          — from package_json.package_version
-#   TECHNOLOGY               — from package_json.technology
-#   TECHNOLOGY_VERSION       — from package_json.technology_version
-#   UBI_VERSION              — from package_json.ubi_version (default: ubi9)
-#   VALIDATE_BUILD_SCRIPT_V2 — from workflow input
-#   WHEEL_BUILD              — from workflow input
-#   BUILD_DOCKER             — from workflow input
-#   POWERCORE_VERSION        — from workflow input
-# ---------------------------------------------------------------------------
-build_info:
-runs-on: ubuntu-24.04-ppc64le
-steps:
-- name: Install jq
-run: sudo apt update -y && sudo apt install -y jq
+  # ---------------------------------------------------------------------------
+  # build_info: Parses the package_json input, validates required fields, and
+  # writes variable.sh — a sourceable shell file uploaded as an artifact so
+  # every downstream job can download it and source it directly.
+  #
+  # Variables written to variable.sh:
+  #   PACKAGE_NAME             — from package_json.package_name
+  #   PACKAGE_VERSION          — from package_json.package_version
+  #   TECHNOLOGY               — from package_json.technology
+  #   TECHNOLOGY_VERSION       — from package_json.technology_version
+  #   UBI_VERSION              — from package_json.ubi_version (default: ubi9)
+  #   VALIDATE_BUILD_SCRIPT_V2 — from workflow input
+  #   WHEEL_BUILD              — from workflow input
+  #   BUILD_DOCKER             — from workflow input
+  #   POWERCORE_VERSION        — from workflow input
+  # ---------------------------------------------------------------------------
+  build_info:
+    runs-on: ubuntu-24.04-ppc64le
+    steps:
+      - name: Install jq
+        run: sudo apt update -y && sudo apt install -y jq
 
-- name: Parse package_json and write variable.sh
-run: |
-         PKG_JSON='${{ inputs.package_json }}'
+      - name: Parse package_json and write variable.sh
+        run: |
+          PKG_JSON='${{ inputs.package_json }}'
 
-         # Validate JSON
-         if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
-           echo "❌ package_json is not valid JSON"
-           exit 1
-         fi
+          # Validate JSON
+          if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
+            echo "❌ package_json is not valid JSON"
+            exit 1
+          fi
 
-         # Extract fields — technology_version key may have a leading space in
-         # some callers (e.g. {" technology_version": "3.12"}), handle both forms
-         PKG_NAME=$(echo "$PKG_JSON" | jq -r '.package_name    // empty')
-         PKG_VER=$(echo  "$PKG_JSON" | jq -r '.package_version // empty')
-         TECH=$(echo     "$PKG_JSON" | jq -r '.technology      // empty')
-         TECH_VER=$(echo "$PKG_JSON" | jq -r '.technology_version // (.["  technology_version"] // "")' 2>/dev/null || echo "")
-         UBI_VER=$(echo  "$PKG_JSON" | jq -r '.ubi_version // ""')
+          # Extract fields — technology_version key may have a leading space in
+          # some callers (e.g. {" technology_version": "3.12"}), handle both forms
+          PKG_NAME=$(echo "$PKG_JSON" | jq -r '.package_name    // empty')
+          PKG_VER=$(echo  "$PKG_JSON" | jq -r '.package_version // empty')
+          TECH=$(echo     "$PKG_JSON" | jq -r '.technology      // empty')
+          TECH_VER=$(echo "$PKG_JSON" | jq -r '.technology_version // (.["  technology_version"] // "")' 2>/dev/null || echo "")
+          UBI_VER=$(echo  "$PKG_JSON" | jq -r '.ubi_version // ""')
 
-         # Validate required fields
-         for field in PKG_NAME PKG_VER TECH; do
-           eval "val=\$$field"
-           if [ -z "$val" ]; then
-             echo "❌ Required field missing in package_json: $field"
-             exit 1
-           fi
-         done
+          # Validate required fields
+          for field in PKG_NAME PKG_VER TECH; do
+            eval "val=\$$field"
+            if [ -z "$val" ]; then
+              echo "❌ Required field missing in package_json: $field"
+              exit 1
+            fi
+          done
 
-         # Default ubi_version to ubi9 when blank
-         UBI_VER="${UBI_VER:-ubi9}"
+          # Default ubi_version to ubi9 when blank
+          UBI_VER="${UBI_VER:-ubi9}"
 
-         # Write variable.sh as plain KEY="VALUE" lines — no 'export' prefix so
-         # the file can be sourced in bash (source variable.sh) or loaded by any
-         # downstream step that reads it line by line into $GITHUB_ENV.
-         # Using printf avoids heredoc indentation issues in YAML run blocks.
-         printf '%s\n' \
-           "PACKAGE_NAME=\"${PKG_NAME}\"" \
-           "PACKAGE_VERSION=\"${PKG_VER}\"" \
-           "TECHNOLOGY=\"${TECH}\"" \
-           "TECHNOLOGY_VERSION=\"${TECH_VER}\"" \
-           "UBI_VERSION=\"${UBI_VER}\"" \
-           "VALIDATE_BUILD_SCRIPT_V2=\"${{ inputs.validate_build_script_v2 }}\"" \
-           "WHEEL_BUILD=\"${{ inputs.wheel_build }}\"" \
-           "BUILD_DOCKER=\"${{ inputs.build_docker }}\"" \
-           "POWERCORE_VERSION=\"${{ inputs.powercore_version }}\"" \
-           > variable.sh
+          # Write variable.sh as plain KEY="VALUE" lines — no 'export' prefix so
+          # the file can be sourced in bash (source variable.sh) or loaded by any
+          # downstream step that reads it line by line into $GITHUB_ENV.
+          # Using printf avoids heredoc indentation issues in YAML run blocks.
+          printf '%s\n' \
+            "PACKAGE_NAME=\"${PKG_NAME}\"" \
+            "PACKAGE_VERSION=\"${PKG_VER}\"" \
+            "TECHNOLOGY=\"${TECH}\"" \
+            "TECHNOLOGY_VERSION=\"${TECH_VER}\"" \
+            "UBI_VERSION=\"${UBI_VER}\"" \
+            "VALIDATE_BUILD_SCRIPT_V2=\"${{ inputs.validate_build_script_v2 }}\"" \
+            "WHEEL_BUILD=\"${{ inputs.wheel_build }}\"" \
+            "BUILD_DOCKER=\"${{ inputs.build_docker }}\"" \
+            "POWERCORE_VERSION=\"${{ inputs.powercore_version }}\"" \
+            > variable.sh
 
-         echo "===== variable.sh ====="
-         cat variable.sh
-         echo "======================="
-         echo "✅ ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) ubi=${UBI_VER}"
+          echo "===== variable.sh ====="
+          cat variable.sh
+          echo "======================="
+          echo "✅ ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) ubi=${UBI_VER}"
 
-     - name: Upload variable.sh as artifact
-uses: actions/upload-artifact@v4
-with:
-name: build-info
-path: variable.sh
+      - name: Upload variable.sh as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: variable.sh
 
-# ---------------------------------------------------------------------------
-# build_v2: Downloads build-info artifact, sources variable.sh to get all
-# build parameters, then downloads PowerCore wheels from COS, installs
-# PowerCore, converts the parameters to a CSV, drops it into the preprocess
-# inbox, and polls until the pipeline completes or fails.
-# ---------------------------------------------------------------------------
-build_v2:
-needs: build_info
-if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' || inputs.build_docker == 'true' }}
-runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
-steps:
-- name: Checkout code
-uses: actions/checkout@v4
+  # ---------------------------------------------------------------------------
+  # build_v2: Downloads build-info artifact, sources variable.sh to get all
+  # build parameters, then downloads PowerCore wheels from COS, installs
+  # PowerCore, converts the parameters to a CSV, drops it into the preprocess
+  # inbox, and polls until the pipeline completes or fails.
+  # ---------------------------------------------------------------------------
+  build_v2:
+    needs: build_info
+    if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' || inputs.build_docker == 'true' }}
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-- name: Download build-info artifact
-uses: actions/download-artifact@v4
-with:
-name: build-info
+      - name: Download build-info artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-info
 
-- name: Load variable.sh into job environment
-run: |
-         echo "===== variable.sh ====="
-         cat variable.sh
-         echo "======================="
-         # Push every KEY="VALUE" line from variable.sh into $GITHUB_ENV so
-         # all subsequent steps in this job can reference ${{ env.KEY }}
-         while IFS='=' read -r key value; do
-           key="${key// /}"                                # strip any spaces from key
-           [[ -z "$key" || "$key" == \#* ]] && continue  # skip blanks/comments
-           value="${value%\"}"                             # strip trailing quote
-           value="${value#\"}"                             # strip leading quote
-           echo "${key}=${value}" >> $GITHUB_ENV
-         done < variable.sh
+      - name: Load variable.sh into job environment
+        run: |
+          echo "===== variable.sh ====="
+          cat variable.sh
+          echo "======================="
+          # Push every KEY="VALUE" line from variable.sh into $GITHUB_ENV so
+          # all subsequent steps in this job can reference ${{ env.KEY }}
+          while IFS='=' read -r key value; do
+            key="${key// /}"                                # strip any spaces from key
+            [[ -z "$key" || "$key" == \#* ]] && continue  # skip blanks/comments
+            value="${value%\"}"                             # strip trailing quote
+            value="${value#\"}"                             # strip leading quote
+            echo "${key}=${value}" >> $GITHUB_ENV
+          done < variable.sh
 
-     - name: Install system dependencies
-run: |
-         sudo apt update -y
-         sudo apt install -y wget curl tar jq git
+      - name: Install system dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y wget curl tar jq git
 
-     - name: Install powercore wheels from COS
-env:
-GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-run: |
-         echo "Fetching IAM token..."
-         token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
-           -H "content-type: application/x-www-form-urlencoded" \
-           -H "accept: application/json" \
-           -d "grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey&apikey=$GHA_CURRENCY_SERVICE_ID_API_KEY")
+      - name: Install powercore wheels from COS
+        env:
+          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+        run: |
+          echo "Fetching IAM token..."
+          token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
+            -H "content-type: application/x-www-form-urlencoded" \
+            -H "accept: application/json" \
+            -d "grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey&apikey=$GHA_CURRENCY_SERVICE_ID_API_KEY")
 
-         if [[ $(echo "$token_request" | jq -r '.errorCode') != "null" ]]; then
-           echo "ERROR: IAM token request failed. Response: $token_request"
-           exit 1
-         fi
+          if [[ $(echo "$token_request" | jq -r '.errorCode') != "null" ]]; then
+            echo "ERROR: IAM token request failed. Response: $token_request"
+            exit 1
+          fi
 
-         token=$(echo "$token_request" | jq -r '.access_token')
-         if [[ -z "$token" || "$token" == "null" ]]; then
-           echo "ERROR: IAM token missing from response: $token_request"
-           exit 1
-         fi
+          token=$(echo "$token_request" | jq -r '.access_token')
+          if [[ -z "$token" || "$token" == "null" ]]; then
+            echo "ERROR: IAM token missing from response: $token_request"
+            exit 1
+          fi
 
-         BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
-         LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
+          BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
+          LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
 
-         mkdir -p powercore-wheels
+          mkdir -p powercore-wheels
 
-         # POWERCORE_VERSION is loaded from variable.sh via $GITHUB_ENV
-         echo "Targeting powercore wheels version: ${POWERCORE_VERSION}"
-         echo "Listing COS objects from: ${LIST_URL}"
+          # POWERCORE_VERSION is loaded from variable.sh via $GITHUB_ENV
+          echo "Targeting powercore wheels version: ${POWERCORE_VERSION}"
+          echo "Listing COS objects from: ${LIST_URL}"
 
-         list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
-         curl_status=$?
-         if [[ $curl_status -ne 0 ]]; then
-           echo "ERROR: Failed to list wheels from COS. curl exit code: ${curl_status}"
-           exit 1
-         fi
+          list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
+          curl_status=$?
+          if [[ $curl_status -ne 0 ]]; then
+            echo "ERROR: Failed to list wheels from COS. curl exit code: ${curl_status}"
+            exit 1
+          fi
 
-         if echo "$list_response" | grep -q "<Error>"; then
-           echo "ERROR: COS list request returned an error response:"
-           echo "$list_response"
-           exit 1
-         fi
+          if echo "$list_response" | grep -q "<Error>"; then
+            echo "ERROR: COS list request returned an error response:"
+            echo "$list_response"
+            exit 1
+          fi
 
-         all_keys=$(printf '%s' "$list_response" | tr '<' '\n' | sed -n 's:^Key>\([^<]*\.whl\)$:\1:p')
+          all_keys=$(printf '%s' "$list_response" | tr '<' '\n' | sed -n 's:^Key>\([^<]*\.whl\)$:\1:p')
 
-         if [[ -z "$all_keys" ]]; then
-           echo "ERROR: No wheel files were found in COS list response."
-           echo "COS list response:"
-           echo "$list_response"
-           exit 1
-         fi
+          if [[ -z "$all_keys" ]]; then
+            echo "ERROR: No wheel files were found in COS list response."
+            echo "COS list response:"
+            echo "$list_response"
+            exit 1
+          fi
 
-         echo "Available wheel keys:"
-         echo "$all_keys"
+          echo "Available wheel keys:"
+          echo "$all_keys"
 
-         matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
+          matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
 
-         if [[ -z "$matched_keys" ]]; then
-           echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
-           echo "Available wheels:"
-           echo "$all_keys"
-           exit 1
-         fi
+          if [[ -z "$matched_keys" ]]; then
+            echo "ERROR: No wheels found in COS matching version '${POWERCORE_VERSION}'"
+            echo "Available wheels:"
+            echo "$all_keys"
+            exit 1
+          fi
 
-         echo "Matched wheels for version ${POWERCORE_VERSION}:"
-         echo "$matched_keys"
+          echo "Matched wheels for version ${POWERCORE_VERSION}:"
+          echo "$matched_keys"
 
-         while IFS= read -r wheel_key; do
-           [[ -z "$wheel_key" ]] && continue
-           echo "Downloading: ${wheel_key}"
-           if ! curl -fsS -H "Authorization: bearer $token" \
-             -o "powercore-wheels/$(basename "$wheel_key")" \
-             "${BUCKET_URL}/${wheel_key}"; then
-             echo "ERROR: Failed to download wheel '${wheel_key}'"
-             exit 1
-           fi
-         done <<< "$matched_keys"
+          while IFS= read -r wheel_key; do
+            [[ -z "$wheel_key" ]] && continue
+            echo "Downloading: ${wheel_key}"
+            if ! curl -fsS -H "Authorization: bearer $token" \
+              -o "powercore-wheels/$(basename "$wheel_key")" \
+              "${BUCKET_URL}/${wheel_key}"; then
+              echo "ERROR: Failed to download wheel '${wheel_key}'"
+              exit 1
+            fi
+          done <<< "$matched_keys"
 
-         echo "Downloaded wheels:"
-         ls -lh powercore-wheels/
-         echo "Downloading powercore-config.env..."
-         if ! curl -fsS -H "Authorization: bearer $token" \
-           -o "powercore-config.env" \
-           "${BUCKET_URL}/powercore-config.env"; then
-           echo "ERROR: Failed to download powercore-config.env"
-           exit 1
-         fi
-         echo "powercore-config.env contents:"
-         cat powercore-config.env
+          echo "Downloaded wheels:"
+          ls -lh powercore-wheels/
+          echo "Downloading powercore-config.env..."
+          if ! curl -fsS -H "Authorization: bearer $token" \
+            -o "powercore-config.env" \
+            "${BUCKET_URL}/powercore-config.env"; then
+            echo "ERROR: Failed to download powercore-config.env"
+            exit 1
+          fi
+          echo "powercore-config.env contents:"
+          cat powercore-config.env
 
-     - name: Install powercore wheels
-run: |
-         python3.12 -m pip install --upgrade pip --user --quiet
+      - name: Install powercore wheels
+        run: |
+          python3.12 -m pip install --upgrade pip --user --quiet
 
-         # Step 1: install the powercore_installer wheel as root so that the
-         # powercore-install console script lands in /usr/local/bin and can be
-         # called with sudo in the next step.
-         installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
-         if [[ -z "$installer_wheel" ]]; then
-           echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
-           exit 1
-         fi
-         echo "Installing powercore_installer from: ${installer_wheel}"
-         sudo python3.12 -m pip install "$installer_wheel" --force-reinstall
+          # Step 1: install the powercore_installer wheel as root so that the
+          # powercore-install console script lands in /usr/local/bin and can be
+          # called with sudo in the next step.
+          installer_wheel=$(ls powercore-wheels/powercore_installer-*.whl 2>/dev/null | head -1)
+          if [[ -z "$installer_wheel" ]]; then
+            echo "ERROR: powercore_installer wheel not found in powercore-wheels/"
+            exit 1
+          fi
+          echo "Installing powercore_installer from: ${installer_wheel}"
+          sudo python3.12 -m pip install "$installer_wheel" --force-reinstall
 
-         echo "Installed packages:"
-         python3.12 -m pip list | grep -i powercore
+          echo "Installed packages:"
+          python3.12 -m pip list | grep -i powercore
 
       - name: Install IBM Cloud CLI
         run: |
@@ -494,19 +494,19 @@ run: |
           fi
           echo "--- All PowerCore workers active ---"
 
-     # -----------------------------------------------------------------------
-# Convert the JSON input to a CSV file and drop it into the PowerCore
-# preprocess inbox. The 03-preprocess worker picks up any file from its
-# inbox, creates a BRequest directory, and hands it to 04-shallow-scan.
-#
-# CSV column names match the ColumnMapper.COLUMN_MAPPINGS aliases in
-# 03-Preprocess/src/powercore/preprocess/preprocess.py so that the
-# preprocess stage can map them without any ambiguity.
-#
-# Required columns : package_name, package_version, technology
-# Optional columns : technology_version (defaults to lang default),
-#                    ubi_version        (blank → "ubi9" applied by preprocess)
-# -----------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # Convert the JSON input to a CSV file and drop it into the PowerCore
+      # preprocess inbox. The 03-preprocess worker picks up any file from its
+      # inbox, creates a BRequest directory, and hands it to 04-shallow-scan.
+      #
+      # CSV column names match the ColumnMapper.COLUMN_MAPPINGS aliases in
+      # 03-Preprocess/src/powercore/preprocess/preprocess.py so that the
+      # preprocess stage can map them without any ambiguity.
+      #
+      # Required columns : package_name, package_version, technology
+      # Optional columns : technology_version (defaults to lang default),
+      #                    ubi_version        (blank → "ubi9" applied by preprocess)
+      # -----------------------------------------------------------------------
       - name: Convert package JSON to CSV and drop into PowerCore inbox
         id: drop_csv
         run: |
@@ -556,48 +556,48 @@ run: |
           echo "csv_name=${CSV_NAME}"                    >> $GITHUB_OUTPUT
           echo "powercore_runtime=${POWERCORE_RUNTIME}" >> $GITHUB_OUTPUT
 
-     # -----------------------------------------------------------------------
-     # Track the BRequest directory as it moves through every stage.
-     #
-     # How the pipeline actually works (grounded in source code):
-     #
-     #   worker.py StageWorker._acquire_next_item():
-     #     inbox/ → (atomic rename) → processing/
-     #
-     #   worker.py StageWorker._complete_item():
-     #     processing/ → (rename) → outbox/ → (rename) → next-stage/inbox/
-     #     final stage (07-bookkeeping, next_stage=None):
-     #       outbox/ → (rename) → runtime/requests/
-     #
-     #   adapters/preprocess.py process_file():
-     #     input: CSV file in queues/03-preprocess/processing/
-     #     output: BRequest_* dir created in runtime/input/
-     #     _complete_item then moves it → queues/04-shallow-scan/inbox/
-     #     NOTE: BRequest dir does NOT exist inside 03-preprocess/queues at all —
-     #           03-preprocess processes raw files, not BRequest dirs.
-     #
-     #   adapters/shallow_scan.py:
-     #     Checks deep_scan_input.csv inside BRequest. If it has rows:
-     #       → 05-deep-scan
-     #     Else (all packages already satisfied):
-     #       → 06-post-process  (skips deep-scan entirely)
-     #
-     #   Error handling (_handle_error):
-     #     Writes BRequest_dir/.error with "ExceptionType: message"
-     #     Then renames BRequest back to inbox/ for retry.
-     #     There is NO permanent failed/ dir in the new worker.
-     #     The .error file travels with the BRequest back to inbox.
-     #
-     # Full location space for a BRequest (from source):
-     #   queues/04-shallow-scan/{inbox,processing,outbox}/BRequest_*
-     #   queues/05-deep-scan/{inbox,processing,outbox}/BRequest_*    (may be skipped)
-     #   queues/06-post-process/{inbox,processing,outbox}/BRequest_*
-     #   queues/07-bookkeeping/{inbox,processing,outbox}/BRequest_*
-     #   requests/BRequest_*   ← terminal success (worker.py:254)
-     #
-     # Poll every 10 s. Immediately log when location changes.
-     # Soft timeout at 10500 s (175 min) to beat the 180-min GHA hard kill.
-     # -----------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # Track the BRequest directory as it moves through every stage.
+      #
+      # How the pipeline actually works (grounded in source code):
+      #
+      #   worker.py StageWorker._acquire_next_item():
+      #     inbox/ → (atomic rename) → processing/
+      #
+      #   worker.py StageWorker._complete_item():
+      #     processing/ → (rename) → outbox/ → (rename) → next-stage/inbox/
+      #     final stage (07-bookkeeping, next_stage=None):
+      #       outbox/ → (rename) → runtime/requests/
+      #
+      #   adapters/preprocess.py process_file():
+      #     input: CSV file in queues/03-preprocess/processing/
+      #     output: BRequest_* dir created in runtime/input/
+      #     _complete_item then moves it → queues/04-shallow-scan/inbox/
+      #     NOTE: BRequest dir does NOT exist inside 03-preprocess/queues at all —
+      #           03-preprocess processes raw files, not BRequest dirs.
+      #
+      #   adapters/shallow_scan.py:
+      #     Checks deep_scan_input.csv inside BRequest. If it has rows:
+      #       → 05-deep-scan
+      #     Else (all packages already satisfied):
+      #       → 06-post-process  (skips deep-scan entirely)
+      #
+      #   Error handling (_handle_error):
+      #     Writes BRequest_dir/.error with "ExceptionType: message"
+      #     Then renames BRequest back to inbox/ for retry.
+      #     There is NO permanent failed/ dir in the new worker.
+      #     The .error file travels with the BRequest back to inbox.
+      #
+      # Full location space for a BRequest (from source):
+      #   queues/04-shallow-scan/{inbox,processing,outbox}/BRequest_*
+      #   queues/05-deep-scan/{inbox,processing,outbox}/BRequest_*    (may be skipped)
+      #   queues/06-post-process/{inbox,processing,outbox}/BRequest_*
+      #   queues/07-bookkeeping/{inbox,processing,outbox}/BRequest_*
+      #   requests/BRequest_*   ← terminal success (worker.py:254)
+      #
+      # Poll every 10 s. Immediately log when location changes.
+      # Soft timeout at 10500 s (175 min) to beat the 180-min GHA hard kill.
+      # -----------------------------------------------------------------------
       - name: Wait for PowerCore pipeline to complete
         timeout-minutes: 180
         run: |
@@ -871,4 +871,3 @@ run: |
             sleep "${POLL_INTERVAL}"
             ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
           done
-       
