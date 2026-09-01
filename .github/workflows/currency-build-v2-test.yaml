@@ -63,7 +63,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Make gha-scripts executable
-        run: chmod +x ./gha-scripts/*.sh
+        run: |
+          ls
+          =======================
+          pwd
+          chmod +x ./gha-scripts/*.sh
 
       - name: Install jq
         run: sudo apt update -y && sudo apt install -y jq
