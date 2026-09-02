@@ -46,14 +46,30 @@ _sctl() {
     systemctl --user "$@"
 }
 
-# ── Stop any running workers so they restart with the fresh env ──────────────
-# systemd reads EnvironmentFile only at service start — running workers keep
-# their original env. Stop the target now; start below brings them back clean.
-echo "--- Stopping workers (if running) ---"
-_sctl stop powercore-workflow.target 2>/dev/null || true
-sleep 2
+# ── Inject --force-rebuild directly into the 04-shallow-scan unit ────────────
+# The EnvironmentFile approach is unreliable when Restart=always races with
+# the stop/start cycle. Instead, patch ExecStart in the installed service file
+# to pass --force-rebuild directly on the command line — the adapter forwards
+# it via original_argv (shallow_scan.py adapter L59: '--force-rebuild' in argv).
+# This is the most reliable path: no env var timing, no dbus races.
+UNIT_FILE="${PC_HOME}/.config/systemd/user/powercore-worker@.service"
+echo "--- Patching ExecStart in ${UNIT_FILE} ---"
+# Show current ExecStart
+grep "ExecStart" "${UNIT_FILE}"
+# Add --force-rebuild to ExecStart if not already present
+sudo sed -i 's|ExecStart=\(.*powercore-worker\) %i$|ExecStart=\1 %i --force-rebuild|' "${UNIT_FILE}"
+grep "ExecStart" "${UNIT_FILE}"
+echo "--- ExecStart patched ---"
 
-echo "--- Reloading systemd user daemon ---"
+# Stop each worker individually (target stop alone races with Restart=always)
+echo "--- Stopping all worker services ---"
+for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+  _sctl stop "powercore-worker@${stage}.service" 2>/dev/null || true
+done
+_sctl stop powercore-workflow.target 2>/dev/null || true
+sleep 5
+
+echo "--- Reloading systemd user daemon (picks up patched ExecStart) ---"
 _sctl daemon-reload
 
 echo "--- Starting powercore-workflow.target ---"
