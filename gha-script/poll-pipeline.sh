@@ -115,11 +115,22 @@ _json_field() {
 # ── _print_shallow_summary ─────────────────────────────────────────────────────
 # Reads shallow_scan_metadata.json (written by shallow_scan.py:write_shallow_scan_metadata).
 # File lives at: BRequest_dir/sheet_*/shallow_scan_output/shallow_scan_metadata.json
+# $1 = hint directory (checked first); if not found there, searched across entire
+#      POWERCORE_RUNTIME so the file is still found after the BRequest moves stage.
 _print_shallow_summary() {
   local meta
   meta=$(sudo -u powercore find "$1" \
     -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
-  [ -z "$meta" ] && return
+  if [ -z "$meta" ]; then
+    echo "  [debug] shallow_scan_metadata.json not in hint dir $1 — searching full runtime..."
+    meta=$(sudo -u powercore find "${POWERCORE_RUNTIME}" \
+      -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
+  fi
+  if [ -z "$meta" ]; then
+    echo "  [debug] shallow_scan_metadata.json not found anywhere under ${POWERCORE_RUNTIME}"
+    return
+  fi
+  echo "  [debug] shallow_scan_metadata.json found: ${meta}"
   local satisfied failed_known noarch rebuild new_pkg lang_unavail
   local pass_deep reduction dur next_st
   satisfied=$(_json_field   "${meta}" "satisfied")
@@ -154,16 +165,18 @@ _print_shallow_summary() {
 # progress_reporter.py writes: "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
 # Fallback: run_core._print_summary() individual lines.
 _print_deep_scan_summary() {
-  [ ! -f "${WFLOG}" ] && return
+  [ ! -f "${WFLOG}" ] && { echo "  [debug] workflow.log not found at ${WFLOG}"; return; }
+  echo "  [debug] Reading deep scan summary from ${WFLOG}"
   local done_line
   done_line=$(sudo -u powercore grep -a "DONE" "${WFLOG}" 2>/dev/null \
     | grep -a "elapsed=" | tail -1 || true)
   if [ -n "$done_line" ]; then
-    echo "  Deep Scan Summary"
+    echo "  Deep Scan Summary (progress_reporter)"
     echo "  ----------------------------------------"
     echo "  ${done_line}"
     echo "  ----------------------------------------"
   else
+    echo "  [debug] No '■ DONE … elapsed=' line found — trying _print_summary fallback"
     local total success failed rate
     total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null \
       | tail -1 | grep -oP '\d+' || true)
@@ -174,14 +187,40 @@ _print_deep_scan_summary() {
     rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null \
       | tail -1 | grep -oP '[\d.]+%' || true)
     if [ -n "$total" ]; then
-      echo "  Deep Scan Summary"
+      echo "  Deep Scan Summary (run_core fallback)"
       echo "  ----------------------------------------"
       echo "  Total     : ${total}"
       echo "  Succeeded : ${success:-?}"
       echo "  Failed    : ${failed:-?}"
       echo "  Rate      : ${rate:-?}"
       echo "  ----------------------------------------"
+    else
+      echo "  [debug] No summary lines found in workflow.log — see validation_summary.json below"
     fi
+  fi
+}
+
+# ── _print_deep_scan_results ───────────────────────────────────────────────────
+# Reads validation_summary.json files written by run_core.py per package at:
+#   BRequest_dir/sheet_*/package_name/output/validation_summary.json
+# $1 = root directory to search (BRequest dir)
+_print_deep_scan_results() {
+  local root="$1"
+  echo "  [debug] Searching for validation_summary.json under ${root}"
+  local found_any=false
+  while IFS= read -r vsf; do
+    found_any=true
+    local pkg ver status build_time
+    pkg=$(_json_field        "${vsf}" "package_name")
+    ver=$(_json_field        "${vsf}" "version")
+    status=$(_json_field     "${vsf}" "status")
+    build_time=$(_json_field "${vsf}" "build_time_seconds")
+    printf "  [%-12s]  %-30s  %-10s  %ss\n" \
+      "${status:-?}" "${pkg:-?}" "${ver:-?}" "${build_time:-?}"
+  done < <(sudo -u powercore find "${root}" \
+    -name "validation_summary.json" 2>/dev/null)
+  if [ "$found_any" = "false" ]; then
+    echo "  [debug] No validation_summary.json found under ${root}"
   fi
 }
 
@@ -364,8 +403,12 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
+    echo "  Deep Scan — Per-Package Results"
+    echo "  ----------------------------------------"
+    _print_deep_scan_results "${RESULT_DIR}"
+    echo ""
     SHALLOW_CSV=$(sudo -u powercore find "${RESULT_DIR}" \
-      -maxdepth 1 -name "*shallow_results.csv" 2>/dev/null | head -1)
+      -name "*shallow_results.csv" 2>/dev/null | head -1)
     if [ -n "$SHALLOW_CSV" ]; then
       echo "  Shallow Scan — Per-Package Status"
       echo "  ----------------------------------------"
@@ -431,6 +474,11 @@ while true; do
           ;;
         05-deep-scan)
           _print_deep_scan_summary
+          echo ""
+          echo "  Deep Scan — Per-Package Results"
+          echo "  ----------------------------------------"
+          _print_deep_scan_results \
+            "${POWERCORE_RUNTIME}/queues/${CUR_STAGE}/${CUR_SUB:-inbox}/${BREQUEST}"
           echo ""
           ;;
       esac
