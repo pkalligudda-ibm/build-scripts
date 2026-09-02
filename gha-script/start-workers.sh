@@ -5,6 +5,13 @@
 # Usage:
 #   start-workers.sh
 #
+# POWERCORE_FORCE_REBUILD=true is always written to workflow.env so the
+# 04-shallow-scan worker sends ALL packages to deep scan regardless of DB status.
+# To disable force-rebuild, set POWERCORE_FORCE_REBUILD=false in workflow.env
+# manually before running — the env var takes effect via the adapter priority:
+#   CLI flag --force-rebuild  →  1st priority
+#   POWERCORE_FORCE_REBUILD env var  →  2nd priority (used here)
+#
 # Requires: 'powercore' system user to exist (run after install-powercore.sh).
 set -euo pipefail
 
@@ -27,6 +34,17 @@ if [ ! -d "${XDG_DIR}" ]; then
   sleep 3
 fi
 ls -la "${XDG_DIR}" 2>/dev/null || echo "WARN: ${XDG_DIR} still not available"
+
+# ── Write POWERCORE_FORCE_REBUILD=true into workflow.env ─────────────────────
+# The service unit EnvironmentFile's this file so every worker picks it up.
+# This ensures all packages are sent to deep scan regardless of DB status.
+PC_HOME=$(getent passwd powercore | cut -d: -f6)
+WORKFLOW_ENV="${PC_HOME}/powercore/runtime/config/workflow.env"
+sudo -u powercore mkdir -p "$(dirname "${WORKFLOW_ENV}")"
+sudo -u powercore sed -i '/^POWERCORE_FORCE_REBUILD=/d' "${WORKFLOW_ENV}" 2>/dev/null || true
+echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}" > /dev/null
+echo "--- workflow.env ---"
+sudo -u powercore cat "${WORKFLOW_ENV}"
 
 # Helper: run a systemctl command as the powercore user
 _sctl() {
