@@ -46,26 +46,12 @@ _sctl() {
     systemctl --user "$@"
 }
 
-# ── Kill any already-running workers so they restart with the fresh env ───────
+# ── Stop any running workers so they restart with the fresh env ──────────────
 # systemd reads EnvironmentFile only at service start — running workers keep
-# their original env. Kill the processes directly (works even without XDG) so
-# systemd's Restart=always brings them back clean with the updated workflow.env.
-echo "--- Killing any running powercore-worker processes ---"
-sudo pkill -u powercore -f "powercore-worker" 2>/dev/null || true
-sleep 3
-
-# ── Ensure XDG runtime dir exists — retry up to 30 s ─────────────────────────
-# loginctl linger creates /run/user/<uid> asynchronously; poll until it appears.
-if [ ! -d "${XDG_DIR}" ]; then
-  echo "--- Enabling loginctl linger for powercore ---"
-  sudo loginctl enable-linger powercore || true
-fi
-for i in $(seq 1 30); do
-  [ -d "${XDG_DIR}" ] && break
-  echo "  [${i}s] Waiting for ${XDG_DIR}..."
-  sleep 1
-done
-ls -la "${XDG_DIR}" 2>/dev/null || echo "WARN: ${XDG_DIR} still not available after 30s"
+# their original env. Stop the target now; start below brings them back clean.
+echo "--- Stopping workers (if running) ---"
+_sctl stop powercore-workflow.target 2>/dev/null || true
+sleep 2
 
 echo "--- Reloading systemd user daemon ---"
 _sctl daemon-reload
