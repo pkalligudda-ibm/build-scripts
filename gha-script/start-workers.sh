@@ -55,10 +55,10 @@ _sctl() {
 UNIT_FILE="${PC_HOME}/.config/systemd/user/powercore-worker@.service"
 echo "--- Patching ExecStart in ${UNIT_FILE} ---"
 # Show current ExecStart
-grep "ExecStart" "${UNIT_FILE}"
+sudo grep "ExecStart" "${UNIT_FILE}"
 # Add --force-rebuild to ExecStart if not already present
 sudo sed -i 's|ExecStart=\(.*powercore-worker\) %i$|ExecStart=\1 %i --force-rebuild|' "${UNIT_FILE}"
-grep "ExecStart" "${UNIT_FILE}"
+sudo grep "ExecStart" "${UNIT_FILE}"
 echo "--- ExecStart patched ---"
 
 # Stop each worker individually (target stop alone races with Restart=always)
