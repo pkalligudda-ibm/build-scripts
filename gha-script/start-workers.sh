@@ -23,27 +23,19 @@ fi
 POWERCORE_UID=$(id -u powercore)
 XDG_DIR="/run/user/${POWERCORE_UID}"
 DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
+PC_HOME=$(getent passwd powercore | cut -d: -f6)
+WORKFLOW_ENV="${PC_HOME}/powercore/runtime/config/workflow.env"
 
 echo "--- powercore UID: ${POWERCORE_UID} ---"
 echo "--- XDG_RUNTIME_DIR: ${XDG_DIR} ---"
 
-# Ensure XDG runtime dir exists (loginctl linger creates it)
-if [ ! -d "${XDG_DIR}" ]; then
-  echo "WARN: ${XDG_DIR} does not exist — enabling loginctl linger"
-  sudo loginctl enable-linger powercore || true
-  sleep 3
-fi
-ls -la "${XDG_DIR}" 2>/dev/null || echo "WARN: ${XDG_DIR} still not available"
-
-# ── Write POWERCORE_FORCE_REBUILD=true into workflow.env ─────────────────────
-# The service unit EnvironmentFile's this file so every worker picks it up.
-# This ensures all packages are sent to deep scan regardless of DB status.
-PC_HOME=$(getent passwd powercore | cut -d: -f6)
-WORKFLOW_ENV="${PC_HOME}/powercore/runtime/config/workflow.env"
+# ── Write workflow.env FIRST — before any systemd interaction ─────────────────
+# This must happen before start so workers read the fresh env at launch.
+# Also written before loginctl linger so it exists even if XDG setup is slow.
 sudo -u powercore mkdir -p "$(dirname "${WORKFLOW_ENV}")"
 sudo -u powercore sed -i '/^POWERCORE_FORCE_REBUILD=/d' "${WORKFLOW_ENV}" 2>/dev/null || true
 echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}" > /dev/null
-echo "--- workflow.env ---"
+echo "--- workflow.env contents ---"
 sudo -u powercore cat "${WORKFLOW_ENV}"
 
 # Helper: run a systemctl command as the powercore user
@@ -53,6 +45,27 @@ _sctl() {
     DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
     systemctl --user "$@"
 }
+
+# ── Kill any already-running workers so they restart with the fresh env ───────
+# systemd reads EnvironmentFile only at service start — running workers keep
+# their original env. Kill the processes directly (works even without XDG) so
+# systemd's Restart=always brings them back clean with the updated workflow.env.
+echo "--- Killing any running powercore-worker processes ---"
+sudo pkill -u powercore -f "powercore-worker" 2>/dev/null || true
+sleep 3
+
+# ── Ensure XDG runtime dir exists — retry up to 30 s ─────────────────────────
+# loginctl linger creates /run/user/<uid> asynchronously; poll until it appears.
+if [ ! -d "${XDG_DIR}" ]; then
+  echo "--- Enabling loginctl linger for powercore ---"
+  sudo loginctl enable-linger powercore || true
+fi
+for i in $(seq 1 30); do
+  [ -d "${XDG_DIR}" ] && break
+  echo "  [${i}s] Waiting for ${XDG_DIR}..."
+  sleep 1
+done
+ls -la "${XDG_DIR}" 2>/dev/null || echo "WARN: ${XDG_DIR} still not available after 30s"
 
 echo "--- Reloading systemd user daemon ---"
 _sctl daemon-reload
