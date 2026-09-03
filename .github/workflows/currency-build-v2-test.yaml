@@ -124,11 +124,6 @@ jobs:
             "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             "$POWERCORE_VERSION"
 
-      - name: Install PowerCore wheels
-        run: |
-          chmod +x ./gha-script/install-powercore.sh
-          bash ./gha-script/install-powercore.sh "$(pwd)/powercore-config.env"
-
       - name: Install IBM Cloud CLI
         run: |
           echo "--- Installing IBM Cloud CLI ---"
@@ -139,6 +134,11 @@ jobs:
           ibmcloud plugin install container-registry -f
           ibmcloud plugin list
 
+      - name: Install PowerCore wheels
+        run: |
+          chmod +x ./gha-script/install-powercore.sh
+          bash ./gha-script/install-powercore.sh "$(pwd)/powercore-config.env"
+
       - name: Create PowerCore queue directories
         run: |
           chmod +x ./gha-script/setup-queues.sh
@@ -146,6 +146,17 @@ jobs:
 
       - name: Start PowerCore workers
         run: |
+          POWERCORE_UID=$(id -u powercore)
+          if [ ! -d "/run/user/${POWERCORE_UID}" ]; then
+            echo "--- Creating /run/user/${POWERCORE_UID} ---"
+            sudo mkdir -p "/run/user/${POWERCORE_UID}"
+            sudo chown "${POWERCORE_UID}:${POWERCORE_UID}" "/run/user/${POWERCORE_UID}"
+            sudo chmod 700 "/run/user/${POWERCORE_UID}"
+            sudo loginctl enable-linger powercore || true
+            sleep 3
+          fi
+          echo "--- /run/user/${POWERCORE_UID} ready ---"
+          ls -la "/run/user/${POWERCORE_UID}"
           chmod +x ./gha-script/start-workers.sh
           bash ./gha-script/start-workers.sh
 
