@@ -128,14 +128,12 @@ fi
 # ── Helper: set/replace a KEY=VALUE line in an env file ───────────────────────
 _set_env_var() {
   local file="$1" key="$2" val="$3"
-  [ -f "${file}" ] || return 0
-  # Use printf to safely escape the value before passing to sed — avoids
-  # delimiter collisions when val contains '/', '|', or '&' characters
-  # (e.g. ICR registry URLs, API keys).
-  local escaped_val
-  escaped_val=$(printf '%s\n' "${val}" | sed 's/[\/&]/\\&/g')
+  sudo -u powercore test -f "${file}" 2>/dev/null || return 0
   if sudo -u powercore grep -q "^${key}=" "${file}" 2>/dev/null; then
-    sudo -u powercore sed -i "s|^${key}=.*|${key}=${escaped_val}|" "${file}"
+    # Delete the existing line and append the new value — avoids all sed
+    # delimiter collision issues with '/', '|', '&' in registry URLs/API keys.
+    sudo -u powercore sed -i "/^${key}=/d" "${file}"
+    echo "${key}=${val}" | sudo -u powercore tee -a "${file}" > /dev/null
   else
     echo "${key}=${val}" | sudo -u powercore tee -a "${file}" > /dev/null
   fi
