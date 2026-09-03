@@ -170,6 +170,57 @@ _print_shallow_summary() {
   echo "  Next stage         : ${next_st:-unknown}"
 }
 
+# ── _print_image_pull_info ─────────────────────────────────────────────────────
+# Extracts image availability check lines from the deep scan log so users and
+# devs can see exactly which container images were used for the build.
+# Looks for lines written by docker_manager.ensure_images_available():
+#   "Image availability check"
+#   "✓ <image> — already present"
+#   "↓ Pulling <image> ..."
+#   "✓ Pulled <image>"
+#   "✗ Image not found ..."
+#   "All required images are available"
+_print_image_pull_info() {
+  local logfile="${WFLOG}"
+  # Resolve log file same way _print_deep_scan_summary does
+  if [ ! -f "${logfile}" ]; then
+    logfile=$(sudo -u powercore find "${POWERCORE_RUNTIME}/logs" \
+      -name "*.log" 2>/dev/null | head -1)
+  fi
+  [ -z "${logfile}" ] && return
+
+  local image_lines
+  image_lines=$(sudo -u powercore grep -a \
+    -e "Image availability check" \
+    -e "image(s) required" \
+    -e "already present" \
+    -e "Pulling " \
+    -e "Pulled " \
+    -e "Re-tagging" \
+    -e "Image not found" \
+    -e "Pull attempt" \
+    -e "All required images" \
+    -e "ICR credentials written" \
+    -e "ICR credentials removed" \
+    "${logfile}" 2>/dev/null || true)
+
+  if [ -z "${image_lines}" ]; then
+    echo "  (no image pull info found in ${logfile})"
+    return
+  fi
+  echo "${image_lines}" | sed 's/^/  /'
+}
+
+# ── _dump_deep_scan_journal ────────────────────────────────────────────────────
+# Prints the complete deep scan worker journal — all lines, no limit.
+_dump_deep_scan_journal() {
+  echo "  ── Deep Scan worker journal (full) ──────────────────────────"
+  sudo -u powercore \
+    XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+    journalctl --user -u "powercore-worker@05-deep-scan.service" \
+      --no-pager 2>/dev/null || true
+}
+
 # ── _print_deep_scan_summary ───────────────────────────────────────────────────
 # Deep Scan writes summaries to deep-scan.log (config.py LOGGING["file"]).
 # Fallback: any *.log in the logs/ directory.
@@ -596,11 +647,19 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
+    echo "  Deep Scan — Container Images Used"
+    echo "  ----------------------------------------"
+    _print_image_pull_info
+    echo ""
     echo "  Deep Scan — Per-Package Results"
     echo "  ----------------------------------------"
     _print_deep_scan_results
     # Surface build logs for any failed packages
     _print_failure_logs "${RESULT_DIR}"
+    echo ""
+    echo "  Deep Scan — Full Worker Journal"
+    echo "  ----------------------------------------"
+    _dump_deep_scan_journal
     echo ""
     OUTPUT_DIR="${RESULT_DIR}/output"
     if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
