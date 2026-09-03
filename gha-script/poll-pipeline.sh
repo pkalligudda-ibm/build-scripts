@@ -191,15 +191,19 @@ _print_deep_scan_summary() {
     echo "  ${done_line}"
     echo "  ----------------------------------------"
   else
+    # Log lines look like:
+    #   2026-09-03 07:11:34,752 - module - INFO - Total packages: 1
+    # Extract the number that follows the last ": " on the line.
     local total success failed rate
     total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null \
-      | tail -1 | grep -oP '\d+' || true)
-    success=$(sudo -u powercore grep -a "Successful:" "${WFLOG}" 2>/dev/null \
-      | tail -1 | grep -oP '\d+' || true)
-    failed=$(sudo -u powercore grep -aP "Failed: \d" "${WFLOG}" 2>/dev/null \
-      | tail -1 | grep -oP '\d+$' || true)
+      | tail -1 | sed 's/.*Total packages: *//' | grep -oP '^\d+' || true)
+    success=$(sudo -u powercore grep -a " Successful:" "${WFLOG}" 2>/dev/null \
+      | tail -1 | sed 's/.*Successful: *//' | grep -oP '^\d+' || true)
+    failed=$(sudo -u powercore grep -a " Failed:" "${WFLOG}" 2>/dev/null \
+      | grep -v "Failed packages" | tail -1 \
+      | sed 's/.*Failed: *//' | grep -oP '^\d+' || true)
     rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null \
-      | tail -1 | grep -oP '[\d.]+%' || true)
+      | tail -1 | sed 's/.*Success rate: *//' | grep -oP '^[\d.]+%' || true)
     if [ -n "$total" ]; then
       echo "  Deep Scan Summary"
       echo "  ----------------------------------------"
@@ -244,18 +248,25 @@ _print_deep_scan_results() {
 }
 
 # ── _print_results_summary_fallback ───────────────────────────────────────────
-# Reads output/results_summary.csv from the completed BRequest (survives bookkeeping).
-# Used when validation_summary.json files have already been deleted.
+# Reads results_summary.csv written by post-process (survives bookkeeping).
+# Searched across POWERCORE_RUNTIME so it works whether BRequest is still in
+# queues/ or has already moved to requests/.
 _print_results_summary_fallback() {
-  local rdir="${POWERCORE_RUNTIME}/requests/${BREQUEST}"
   local csv
-  csv=$(sudo -u powercore find "${rdir}/output" \
-    -name "results_summary.csv" 2>/dev/null | head -1)
+  csv=$(sudo -u powercore find "${POWERCORE_RUNTIME}" \
+    -name "results_summary.csv" -path "*/${BREQUEST}/*" 2>/dev/null | head -1)
   if [ -z "$csv" ]; then
-    echo "  (no build results — deep scan produced no packages)"
-    echo "  Deep Scan worker journal (last 40 lines):"
+    # No results at all — dump the deep scan journal to show why Docker didn't run
+    echo "  (no package results found)"
+    echo ""
+    echo "  BRequest directory tree:"
+    sudo -u powercore find "${POWERCORE_RUNTIME}" \
+      -path "*/${BREQUEST}/*" -not -path "*/\.*" 2>/dev/null \
+      | sort | head -40 | sed "s|.*/${BREQUEST}/||" | sed 's/^/    /'
+    echo ""
+    echo "  Deep Scan worker journal (last 50 lines):"
     echo "  ----------------------------------------"
-    _worker_journal "05-deep-scan" 40
+    _worker_journal "05-deep-scan" 50
     return
   fi
   sudo -u powercore awk -F',' '
