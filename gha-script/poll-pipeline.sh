@@ -209,28 +209,59 @@ _print_deep_scan_summary() {
 }
 
 # ── _print_deep_scan_results ───────────────────────────────────────────────────
-# Reads validation_summary.json files written by run_core.py per package at:
-#   BRequest_dir/sheet_*/package_name/output/validation_summary.json
-# Deep scan writes these while the BRequest is in queues/05-deep-scan/processing/.
-# Bookkeeping deletes them when it finalises — search from POWERCORE_RUNTIME root
-# so the files are found regardless of which queue subdir they are currently in.
+# Reads validation_summary.json files written by result_parser.py per package.
+# Path: BRequest_dir/sheet_*/lang/pkg/output[/suffix]/validation_summary.json
+# JSON keys: package_name, package_version, status, execution_time_seconds
+#
+# Searched across all of POWERCORE_RUNTIME so they are found regardless of which
+# queue subdir the BRequest is currently in.  Bookkeeping deletes them on
+# finalisation, so this must be called before the SUCCESS block.
+#
+# Fallback: output/results_summary.json (survives bookkeeping, written by post-process)
 _print_deep_scan_results() {
-  echo "  [debug] Searching for validation_summary.json under ${POWERCORE_RUNTIME}"
   local found_any=false
   while IFS= read -r vsf; do
     found_any=true
-    local pkg ver status build_time
-    pkg=$(_json_field        "${vsf}" "package_name")
-    ver=$(_json_field        "${vsf}" "version")
-    status=$(_json_field     "${vsf}" "status")
-    build_time=$(_json_field "${vsf}" "build_time_seconds")
-    printf "  [%-12s]  %-30s  %-10s  %ss\n" \
-      "${status:-?}" "${pkg:-?}" "${ver:-?}" "${build_time:-?}"
+    local pkg ver status exec_time
+    pkg=$(_json_field       "${vsf}" "package_name")
+    ver=$(_json_field       "${vsf}" "package_version")
+    status=$(_json_field    "${vsf}" "status")
+    exec_time=$(_json_field "${vsf}" "execution_time_seconds")
+    printf "  [%-14s]  %-28s  %-10s  %ss\n" \
+      "${status:-?}" "${pkg:-?}" "${ver:-?}" "${exec_time:-?}"
   done < <(sudo -u powercore find "${POWERCORE_RUNTIME}" \
     -name "validation_summary.json" 2>/dev/null)
   if [ "$found_any" = "false" ]; then
-    echo "  [debug] No validation_summary.json found — deep scan may not have run yet"
+    echo "  [debug] validation_summary.json not found — trying results_summary.json fallback"
+    _print_results_summary_fallback
   fi
+}
+
+# ── _print_results_summary_fallback ───────────────────────────────────────────
+# Reads output/results_summary.csv from the completed BRequest (survives bookkeeping).
+# Used when validation_summary.json files have already been deleted.
+_print_results_summary_fallback() {
+  local rdir="${POWERCORE_RUNTIME}/requests/${BREQUEST}"
+  local csv
+  csv=$(sudo -u powercore find "${rdir}/output" \
+    -name "results_summary.csv" 2>/dev/null | head -1)
+  [ -z "$csv" ] && { echo "  [debug] results_summary.csv not found either"; return; }
+  echo "  [debug] results_summary.csv: ${csv}"
+  sudo -u powercore awk -F',' '
+    NR==1 {
+      for (i=1;i<=NF;i++) {
+        gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+        if ($i=="package_name" || $i=="name")   ni=i
+        if ($i=="package_version"||$i=="version") vi=i
+        if ($i=="status")                       si=i
+      }
+      next
+    }
+    NF>1 {
+      gsub(/\r/,"")
+      printf "  [%-14s]  %-28s  %s\n", (si?$si:"?"), (ni?$ni:"?"), (vi?$vi:"?")
+    }
+  ' "${csv}" 2>/dev/null || true
 }
 
 # ── _print_postprocess_summary ─────────────────────────────────────────────────
@@ -412,10 +443,14 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
-    # NOTE: bookkeeping deletes all build artefacts (sheet_*/, metadata files)
-    # from requests/BRequest keeping only post_process_summary.json + metadata.json.
-    # validation_summary.json and shallow_results.csv are gone by this point.
-    # Those are printed at stage-transition time (05-deep-scan and 04-shallow-scan).
+    # validation_summary.json deleted by bookkeeping — _print_deep_scan_results
+    # automatically falls back to results_summary.csv which lives in output/ and
+    # survives.  If both were already printed at stage-transition time, this is a
+    # no-op (validation_summary.json returns false, fallback reads the same CSV).
+    echo "  Deep Scan — Per-Package Results"
+    echo "  ----------------------------------------"
+    _print_deep_scan_results
+    echo ""
     OUTPUT_DIR="${RESULT_DIR}/output"
     if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
       echo "  Output Files"
@@ -453,31 +488,35 @@ while true; do
   # ── TRANSITION ───────────────────────────────────────────────────────────────
   if [ "${CUR_LOCATION}" != "${PREV_LOCATION}" ]; then
     CUR_STAGE=$(echo "$CUR_LOCATION" | grep -oP '\d\d-[a-z-]+' | head -1)
-    CUR_SUB=$(echo "$CUR_LOCATION"   | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
     ELAPSED_MIN=$(( ELAPSED / 60 ))
     ELAPSED_SEC=$(( ELAPSED % 60 ))
 
     if [ "${CUR_STAGE}" != "${PREV_STAGE}" ] && [ -n "${CUR_STAGE}" ]; then
-      _section_header "${CUR_STAGE}" "${ELAPSED_MIN}" "${ELAPSED_SEC}"
+      # ── Stage-exit summaries: printed under the CLOSING stage's header ───
+      # Strategy: open the new section header, then immediately print a closing
+      # summary for the stage that just ended.  This means:
+      #   - Stage N header  (section_header)
+      #   - [Xm Ys]  Stage N  [running/queued]  (location line)
+      #   ...heartbeats...
+      #   - "Stage N — Done" summary block   ← fired here on exit
+      #   - Stage N+1 header  (next iteration)
+      #
+      # Data availability:
+      #  • shallow_scan_metadata.json: present at BRequest inbox of 05-deep-scan
+      #    when poller first detects the Stage 3 transition — safe to read
+      #  • validation_summary.json: present during 05-deep-scan/processing;
+      #    searched POWERCORE_RUNTIME-wide so found even at 06-post-process inbox
+      #  • Both deleted by bookkeeping — this block fires before SUCCESS check
 
-      # ── Summaries fired on ENTRY into a new stage ────────────────────────
-      # We fire on entry (not exit) because:
-      #  • shallow_scan_metadata.json is written into the BRequest dir which is
-      #    still under queues/05-deep-scan/processing/ when we first see Stage 3
-      #  • validation_summary.json files exist while deep scan runs; bookkeeping
-      #    deletes them on finalisation so we must read before SUCCESS block
-      #  • PREV_STAGE="" on first poll — BRequest already at 04-shallow-scan when
-      #    poller starts — so we can't key on exiting 04-shallow-scan
-      case "${CUR_STAGE}" in
-        05-deep-scan)
-          # Entering deep scan → shallow scan just finished; print its summary
-          echo "  Shallow Scan Summary (completed)"
+      # Print exit summary for the stage that just finished
+      case "${PREV_STAGE}" in
+        04-shallow-scan)
+          echo "  Shallow Scan — Result"
           echo "  ----------------------------------------"
           _print_shallow_summary
           echo ""
           ;;
-        06-post-process)
-          # Entering post-process → deep scan just finished; print its results
+        05-deep-scan)
           _print_deep_scan_summary
           echo ""
           echo "  Deep Scan — Per-Package Results"
@@ -486,6 +525,18 @@ while true; do
           echo ""
           ;;
       esac
+
+      _section_header "${CUR_STAGE}" "${ELAPSED_MIN}" "${ELAPSED_SEC}"
+
+      # Special case: if PREV_STAGE="" the poller never saw Stage 2 individually
+      # (preprocess handed off synchronously before the first poll hit Stage 2).
+      # Shallow scan is already done — print its summary under Stage 3 header.
+      if [ -z "${PREV_STAGE}" ] && [ "${CUR_STAGE}" = "05-deep-scan" ]; then
+        echo "  Shallow Scan — Result (completed before first poll)"
+        echo "  ----------------------------------------"
+        _print_shallow_summary
+        echo ""
+      fi
 
       PREV_STAGE="${CUR_STAGE}"
     fi
