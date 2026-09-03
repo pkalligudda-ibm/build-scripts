@@ -230,6 +230,28 @@ sudo -u powercore grep -v '^#\|^$' "${SYSTEMD_ENV}" 2>/dev/null | head -20 | sed
 echo "  workflow.env (loaded last — wins over systemd.env):"
 sudo -u powercore grep -v '^#\|^$' "${WORKFLOW_ENV}" 2>/dev/null | head -20 | sed 's/^/    /' || true
 
+# ── Show effective merged environment (what workers actually see) ─────────────
+# Merge systemd.env + workflow.env the same way systemd does:
+# later EnvironmentFile= entries win → workflow.env overrides systemd.env.
+echo "--- Effective worker environment ---"
+{
+  sudo -u powercore grep -v '^#\|^$' "${SYSTEMD_ENV}"  2>/dev/null || true
+  sudo -u powercore grep -v '^#\|^$' "${WORKFLOW_ENV}" 2>/dev/null || true
+} | awk -F'=' '
+  /^[A-Z_][A-Z0-9_]*=/ {
+    key=$1
+    val=substr($0, index($0,"=")+1)
+    seen[key]=val
+    order[++n]=key
+  }
+  END {
+    for (i=1; i<=n; i++) {
+      k=order[i]
+      if (k in seen) { printf "  %-35s = %s\n", k, seen[k]; delete seen[k] }
+    }
+  }
+' || true
+
 # Stop each worker individually (target stop alone races with Restart=always)
 echo "--- Stopping all worker services ---"
 for stage in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
