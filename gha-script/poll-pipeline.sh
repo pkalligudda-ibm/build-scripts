@@ -1,183 +1,505 @@
-name: Currency Build V2 Test
-on:
-  workflow_dispatch:
-    inputs:
-      package_json:
-        description: >
-          Package data as a JSON object. Example:
-          {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":""}
-        required: true
-        type: string
-      validate_build_script_v2:
-        description: 'Run v2 build script via powercore'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      wheel_build:
-        description: 'Create wheel for all Python versions via powercore'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      build_docker:
-        description: 'Build docker image'
-        required: true
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
-      powercore_version:
-        description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
-        required: true
-        type: string
-      large-runner-label:
-        description: 'Larger runner to use for resource-heavy builds'
-        required: false
-        type: choice
-        options:
-          - ''
-          - ubuntu-24.04-ppc64le-2xlarge-p10
-          - ubuntu-24.04-ppc64le-4xlarge-p10
+#!/usr/bin/env bash
+# poll-pipeline.sh — Monitor a PowerCore pipeline run until completion or timeout.
+# Tracks the BRequest directory through all 5 stages, printing per-stage summaries.
+#
+# Usage:
+#   poll-pipeline.sh <powercore_runtime> <csv_name> <package_name>
+#
+# Pipeline stage flow (grounded in worker.py + adapter source):
+#   03-preprocess  : CSV → BRequest_* dir created in runtime/input/
+#   04-shallow-scan: categorise packages; route to deep-scan or post-process
+#   05-deep-scan   : build (may be skipped if all packages SATISFIED)
+#   06-post-process: aggregate results, write post_process_summary.json
+#   07-bookkeeping : upload to CouchDB; BRequest moves to runtime/requests/ (DONE)
+#
+# Error handling: worker writes BRequest/.error and retries from inbox — no
+# permanent failed/ dir. We detect .error, log it, and keep polling.
+#
+# Soft timeout: 10500 s (175 min) — fires before GHA's 180-min hard kill.
+set -euo pipefail
 
-run-name: >
-  ${{ inputs.large-runner-label != '' &&
-      format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
-      format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
-  }}
+POWERCORE_RUNTIME="${1:?powercore_runtime required}"
+CSV_NAME="${2:?csv_name required}"
+PKG_NAME="${3:?package_name required}"
 
-jobs:
-  # ---------------------------------------------------------------------------
-  # build_info: Parses the package_json input, validates required fields, and
-  # writes variable.sh — uploaded as an artifact for all downstream jobs.
-  # ---------------------------------------------------------------------------
-  build_info:
-    runs-on: ubuntu-24.04-ppc64le
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+POLL_INTERVAL=10
+ELAPSED=0
+TIMEOUT_SECS=10500
+BREQUEST=""
+PREV_LOCATION=""
+PREV_STAGE=""
 
-      - name: Install jq
-        run: sudo apt update -y && sudo apt install -y jq
+POWERCORE_UID=$(id -u powercore 2>/dev/null || echo "")
+XDG_DIR="/run/user/${POWERCORE_UID}"
+DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
+WFLOG="${POWERCORE_RUNTIME}/logs/workflow.log"
 
-      - name: Parse package_json and write variable.sh
-        run: |
-          chmod +x ./gha-script/parse-package-json.sh
-          bash ./gha-script/parse-package-json.sh \
-            '${{ inputs.package_json }}' \
-            '${{ inputs.validate_build_script_v2 }}' \
-            '${{ inputs.wheel_build }}' \
-            '${{ inputs.build_docker }}' \
-            '${{ inputs.powercore_version }}'
+# ── _find_brequest ─────────────────────────────────────────────────────────────
+# Returns the BRequest path relative to POWERCORE_RUNTIME.
+# Searches: requests/ (done), then queues/ (in-flight).
+_find_brequest() {
+  [ -z "${BREQUEST}" ] && return
+  if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+    echo "requests/${BREQUEST}"; return
+  fi
+  sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+    -mindepth 3 -maxdepth 3 -type d -name "${BREQUEST}" 2>/dev/null \
+    | head -1 | sed "s|${POWERCORE_RUNTIME}/||"
+}
 
-      - name: Upload variable.sh as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-info
-          path: variable.sh
+# ── _fmt_location ──────────────────────────────────────────────────────────────
+# Converts a relative BRequest path into a human-readable label.
+_fmt_location() {
+  local rel="$1"
+  [[ "$rel" == requests/* ]] && { echo "DONE"; return; }
+  local stage subfolder label
+  stage=$(echo "$rel"     | grep -oP '\d\d-[a-z-]+' | head -1)
+  subfolder=$(echo "$rel" | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
+  case "$stage" in
+    03-preprocess)   label="Stage 1/5  Pre-process"   ;;
+    04-shallow-scan) label="Stage 2/5  Shallow Scan"  ;;
+    05-deep-scan)    label="Stage 3/5  Deep Scan"      ;;
+    06-post-process) label="Stage 4/5  Post-Process"  ;;
+    07-bookkeeping)  label="Stage 5/5  Bookkeeping"   ;;
+    *)               label="${stage:-${rel}}"          ;;
+  esac
+  case "$subfolder" in
+    inbox)      label="${label}  [queued]"   ;;
+    processing) label="${label}  [running]"  ;;
+    outbox)     label="${label}  [done]"     ;;
+  esac
+  echo "${label}"
+}
 
-  # ---------------------------------------------------------------------------
-  # build_v2: Downloads build-info artifact, sources variable.sh, downloads
-  # PowerCore wheels from COS, installs PowerCore, drops a CSV into the
-  # preprocess inbox, and polls until the pipeline completes or fails.
-  # ---------------------------------------------------------------------------
-  build_v2:
-    needs: build_info
-    if: ${{ inputs.validate_build_script_v2 == 'true' || inputs.wheel_build == 'true' || inputs.build_docker == 'true' }}
-    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+# ── _worker_journal ────────────────────────────────────────────────────────────
+_worker_journal() {
+  local stage="$1" lines="${2:-40}"
+  echo "  journal: powercore-worker@${stage} (last ${lines} lines)"
+  sudo -u powercore \
+    XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+    journalctl --user -u "powercore-worker@${stage}.service" \
+      --no-pager -n "${lines}" 2>/dev/null || true
+}
 
-      - name: Download build-info artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-info
+_dump_all_journals() {
+  echo "========== Worker journals =========="
+  for s in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+    _worker_journal "$s"
+  done
+}
 
-      - name: Load variable.sh into job environment
-        run: |
-          echo "===== variable.sh ====="
-          cat variable.sh
-          echo "======================="
-          while IFS='=' read -r key value; do
-            key="${key// /}"
-            [[ -z "$key" || "$key" == \#* ]] && continue
-            value="${value%\"}"
-            value="${value#\"}"
-            echo "${key}=${value}" >> "$GITHUB_ENV"
-          done < variable.sh
+# ── _section_header ────────────────────────────────────────────────────────────
+_section_header() {
+  local stage="$1" elapsed_min="$2" elapsed_sec="$3"
+  echo ""
+  echo "============================================================"
+  case "$stage" in
+    04-shallow-scan) echo "  Stage 2/5 — Shallow Scan  [${elapsed_min}m${elapsed_sec}s]" ;;
+    05-deep-scan)    echo "  Stage 3/5 — Deep Scan     [${elapsed_min}m${elapsed_sec}s]" ;;
+    06-post-process) echo "  Stage 4/5 — Post-Process  [${elapsed_min}m${elapsed_sec}s]" ;;
+    07-bookkeeping)  echo "  Stage 5/5 — Bookkeeping   [${elapsed_min}m${elapsed_sec}s]" ;;
+  esac
+  echo "============================================================"
+}
 
-      - name: Install system dependencies
-        run: sudo apt update -y && sudo apt install -y wget curl tar jq git
+# ── _json_field ────────────────────────────────────────────────────────────────
+# Extract a value from a flat JSON file using grep+awk (no python/jq needed).
+# Usage: _json_field <file> <key>   → prints the raw value (no quotes)
+_json_field() {
+  sudo -u powercore grep -o "\"$2\"[[:space:]]*:[[:space:]]*[^,}]*" "$1" \
+    2>/dev/null | head -1 \
+    | awk -F': ' '{gsub(/[",[:space:]]/,"",$2); print $2}' \
+    || true
+}
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/download-wheels.sh
-          bash ./gha-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "$POWERCORE_VERSION"
+# ── _json_nested_field ─────────────────────────────────────────────────────────
+# Extract a value from a nested JSON object: finds the first occurrence of "key"
+# at any depth. Used for shallow_scan_metadata.json whose stats live under
+# {"statistics": {"satisfied": N, ...}}.
+# Usage: _json_nested_field <file> <key>
+_json_nested_field() {
+  sudo -u powercore grep -o "\"$2\"[[:space:]]*:[[:space:]]*[^,}\n]*" "$1" \
+    2>/dev/null | head -1 \
+    | awk -F': ' '{gsub(/[",[:space:]]/,"",$2); print $2}' \
+    || true
+}
 
-      - name: Install PowerCore wheels
-        run: |
-          chmod +x ./gha-script/install-powercore.sh
-          bash ./gha-script/install-powercore.sh "$(pwd)/powercore-config.env"
+# ── _print_shallow_summary ─────────────────────────────────────────────────────
+# Reads shallow_scan_metadata.json (written by shallow_scan.py:write_shallow_scan_metadata).
+# Structure: top-level keys (duration_seconds, next_stage) + nested "statistics"
+# object (satisfied, rebuild, pass_to_deep_scan, …).
+# Searched under POWERCORE_RUNTIME — safe to call at any point regardless of
+# which queue stage the BRequest is currently in.
+_print_shallow_summary() {
+  local meta
+  meta=$(sudo -u powercore find "${POWERCORE_RUNTIME}" \
+    -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
+  if [ -z "$meta" ]; then
+    echo "  [debug] shallow_scan_metadata.json not found under ${POWERCORE_RUNTIME}"
+    return
+  fi
+  echo "  [debug] shallow_scan_metadata.json: ${meta}"
+  local satisfied failed_known noarch rebuild new_pkg lang_unavail
+  local pass_deep dur next_st
+  # stats live inside the "statistics" nested object — use _json_nested_field
+  satisfied=$(_json_nested_field  "${meta}" "satisfied")
+  failed_known=$(_json_nested_field "${meta}" "failed_known")
+  noarch=$(_json_nested_field      "${meta}" "noarch_unverified")
+  rebuild=$(_json_nested_field     "${meta}" "rebuild")
+  new_pkg=$(_json_nested_field     "${meta}" "new")
+  lang_unavail=$(_json_nested_field "${meta}" "lang_ver_unavailable")
+  pass_deep=$(_json_nested_field   "${meta}" "pass_to_deep_scan")
+  # top-level keys
+  dur=$(_json_field                "${meta}" "duration_seconds")
+  next_st=$(_json_field            "${meta}" "next_stage")
+  local total=$(( ${satisfied:-0} + ${failed_known:-0} + ${noarch:-0} \
+                  + ${rebuild:-0} + ${new_pkg:-0} + ${lang_unavail:-0} ))
+  echo "  Shallow Scan Summary"
+  echo "  ----------------------------------------"
+  echo "  Total tasks        : ${total}"
+  echo "  SATISFIED          : ${satisfied:-0}"
+  echo "  FAILED_KNOWN       : ${failed_known:-0}"
+  echo "  NOARCH_UNVERIFIED  : ${noarch:-0}"
+  echo "  REBUILD            : ${rebuild:-0}"
+  echo "  NEW                : ${new_pkg:-0}"
+  echo "  LANG_VER_UNAVAIL   : ${lang_unavail:-0}"
+  echo "  Pass to Deep Scan  : ${pass_deep:-0}"
+  echo "  Duration           : ${dur:-0}s"
+  echo "  ----------------------------------------"
+  echo "  Next stage         : ${next_st:-unknown}"
+}
 
-      - name: Install IBM Cloud CLI
-        run: |
-          echo "--- Installing IBM Cloud CLI ---"
-          curl -fsSL https://clis.cloud.ibm.com/install/linux | sudo sh
-          ibmcloud version
-          echo "--- Installing plugins ---"
-          ibmcloud plugin install cloud-object-storage -f
-          ibmcloud plugin install container-registry -f
-          ibmcloud plugin list
+# ── _print_deep_scan_summary ───────────────────────────────────────────────────
+# progress_reporter.py writes: "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
+# Fallback: run_core._print_summary() individual lines.
+_print_deep_scan_summary() {
+  [ ! -f "${WFLOG}" ] && { echo "  [debug] workflow.log not found at ${WFLOG}"; return; }
+  echo "  [debug] Reading deep scan summary from ${WFLOG}"
+  local done_line
+  done_line=$(sudo -u powercore grep -a "DONE" "${WFLOG}" 2>/dev/null \
+    | grep -a "elapsed=" | tail -1 || true)
+  if [ -n "$done_line" ]; then
+    echo "  Deep Scan Summary (progress_reporter)"
+    echo "  ----------------------------------------"
+    echo "  ${done_line}"
+    echo "  ----------------------------------------"
+  else
+    echo "  [debug] No '■ DONE … elapsed=' line found — trying _print_summary fallback"
+    local total success failed rate
+    total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null \
+      | tail -1 | grep -oP '\d+' || true)
+    success=$(sudo -u powercore grep -a "Successful:" "${WFLOG}" 2>/dev/null \
+      | tail -1 | grep -oP '\d+' || true)
+    failed=$(sudo -u powercore grep -aP "Failed: \d" "${WFLOG}" 2>/dev/null \
+      | tail -1 | grep -oP '\d+$' || true)
+    rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null \
+      | tail -1 | grep -oP '[\d.]+%' || true)
+    if [ -n "$total" ]; then
+      echo "  Deep Scan Summary (run_core fallback)"
+      echo "  ----------------------------------------"
+      echo "  Total     : ${total}"
+      echo "  Succeeded : ${success:-?}"
+      echo "  Failed    : ${failed:-?}"
+      echo "  Rate      : ${rate:-?}"
+      echo "  ----------------------------------------"
+    else
+      echo "  [debug] No summary lines found in workflow.log — see validation_summary.json below"
+    fi
+  fi
+}
 
-      - name: Create PowerCore queue directories
-        run: |
-          chmod +x ./gha-script/setup-queues.sh
-          bash ./gha-script/setup-queues.sh
+# ── _print_deep_scan_results ───────────────────────────────────────────────────
+# Reads validation_summary.json files written by run_core.py per package at:
+#   BRequest_dir/sheet_*/package_name/output/validation_summary.json
+# Deep scan writes these while the BRequest is in queues/05-deep-scan/processing/.
+# Bookkeeping deletes them when it finalises — search from POWERCORE_RUNTIME root
+# so the files are found regardless of which queue subdir they are currently in.
+_print_deep_scan_results() {
+  echo "  [debug] Searching for validation_summary.json under ${POWERCORE_RUNTIME}"
+  local found_any=false
+  while IFS= read -r vsf; do
+    found_any=true
+    local pkg ver status build_time
+    pkg=$(_json_field        "${vsf}" "package_name")
+    ver=$(_json_field        "${vsf}" "version")
+    status=$(_json_field     "${vsf}" "status")
+    build_time=$(_json_field "${vsf}" "build_time_seconds")
+    printf "  [%-12s]  %-30s  %-10s  %ss\n" \
+      "${status:-?}" "${pkg:-?}" "${ver:-?}" "${build_time:-?}"
+  done < <(sudo -u powercore find "${POWERCORE_RUNTIME}" \
+    -name "validation_summary.json" 2>/dev/null)
+  if [ "$found_any" = "false" ]; then
+    echo "  [debug] No validation_summary.json found — deep scan may not have run yet"
+  fi
+}
 
-      - name: Start PowerCore workers
-        run: |
-          POWERCORE_UID=$(id -u powercore)
-          if [ ! -d "/run/user/${POWERCORE_UID}" ]; then
-            echo "--- Creating /run/user/${POWERCORE_UID} ---"
-            sudo mkdir -p "/run/user/${POWERCORE_UID}"
-            sudo chown "${POWERCORE_UID}:${POWERCORE_UID}" "/run/user/${POWERCORE_UID}"
-            sudo chmod 700 "/run/user/${POWERCORE_UID}"
-            sudo loginctl enable-linger powercore || true
-            sleep 3
-          fi
-          echo "--- /run/user/${POWERCORE_UID} ready ---"
-          ls -la "/run/user/${POWERCORE_UID}"
-          chmod +x ./gha-script/start-workers.sh
-          bash ./gha-script/start-workers.sh
+# ── _print_postprocess_summary ─────────────────────────────────────────────────
+# Reads post_process_summary.json (written by postprocess.py at BRequest root).
+# totals keys: total_packages / build_success / build_success_unverified /
+#              build_fail / install_fail / test_fail / timeout / partial
+_print_postprocess_summary() {
+  local pp="$1/post_process_summary.json"
+  sudo -u powercore test -f "${pp}" 2>/dev/null || return
+  local total ok ok_uv b_fail i_fail t_fail tmo partial arch
+  total=$(_json_field  "${pp}" "total_packages")
+  ok=$(_json_field     "${pp}" "build_success")
+  ok_uv=$(_json_field  "${pp}" "build_success_unverified")
+  b_fail=$(_json_field "${pp}" "build_fail")
+  i_fail=$(_json_field "${pp}" "install_fail")
+  t_fail=$(_json_field "${pp}" "test_fail")
+  tmo=$(_json_field    "${pp}" "timeout")
+  partial=$(_json_field "${pp}" "partial")
+  arch=$(_json_field   "${pp}" "architecture")
+  echo "  Post-Process Summary"
+  echo "  ----------------------------------------"
+  echo "  Architecture       : ${arch:-unknown}"
+  echo "  Packages submitted : ${total:-N/A}"
+  [ "${ok:-0}"      != "0" ] && echo "  Build success      : ${ok}"
+  [ "${ok_uv:-0}"   != "0" ] && echo "  Build success (UV) : ${ok_uv}"
+  [ "${b_fail:-0}"  != "0" ] && echo "  Build failures     : ${b_fail}"
+  [ "${i_fail:-0}"  != "0" ] && echo "  Install failures   : ${i_fail}"
+  [ "${t_fail:-0}"  != "0" ] && echo "  Test failures      : ${t_fail}"
+  [ "${tmo:-0}"     != "0" ] && echo "  Timeouts           : ${tmo}"
+  [ "${partial:-0}" != "0" ] && echo "  Partial            : ${partial}"
+  if [ "${ok:-0}" = "0" ] && [ "${ok_uv:-0}" = "0" ] && [ "${total:-0}" != "0" ]; then
+    echo ""
+    echo "  NOTE: 0 builds - packages already SATISFIED in catalog"
+  fi
+  echo "  ----------------------------------------"
+}
 
-      - name: Drop CSV into PowerCore inbox
-        id: drop_csv
-        run: |
-          chmod +x ./gha-script/drop-csv.sh
-          bash ./gha-script/drop-csv.sh \
-            "$POWERCORE_RUNTIME" \
-            "${{ github.run_id }}" \
-            "$PACKAGE_NAME" \
-            "$PACKAGE_VERSION" \
-            "$TECHNOLOGY" \
-            "$TECHNOLOGY_VERSION" \
-            "$UBI_VERSION"
+# ── _print_shallow_csv ─────────────────────────────────────────────────────────
+# Prints per-package shallow scan status from *_shallow_results.csv.
+# Columns (csv_formatter.py): shallow_status, needs_deep_scan, shallow_notes
+_print_shallow_csv() {
+  local csv_path="$1"
+  [ -z "$csv_path" ] && return
+  sudo -u powercore awk -F',' '
+    NR==1 {
+      for (i=1;i<=NF;i++) {
+        gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+        if ($i=="package_name" || $i=="name")        ni=i
+        if ($i=="package_version" || $i=="version")  vi=i
+        if ($i=="shallow_status")  si=i
+        if ($i=="needs_deep_scan") di=i
+        if ($i=="shallow_notes")   oi=i
+      }
+      next
+    }
+    NF>1 {
+      gsub(/\r/,"")
+      name=ni?$ni:"?"
+      ver=vi?$vi:"?"
+      status=si?$si:"?"
+      deep=di?$di:"?"
+      notes=oi?$oi:""
+      tag=(status=="SATISFIED") ? "SATISFIED" : (deep=="true" ? "NEEDS BUILD" : status)
+      printf "  [%-11s]  %s  %s\n", tag, name, ver
+      if (notes != "") printf "               %s\n", notes
+    }
+  ' "${csv_path}" 2>/dev/null || true
+}
 
-      - name: Wait for PowerCore pipeline to complete
-        timeout-minutes: 180
-        run: |
-          chmod +x ./gha-script/poll-pipeline.sh
-          bash ./gha-script/poll-pipeline.sh \
-            "${{ steps.drop_csv.outputs.powercore_runtime }}" \
-            "${{ steps.drop_csv.outputs.csv_name }}" \
-            "$PACKAGE_NAME"
+# ══════════════════════════════════════════════════════════════════════════════
+# STARTUP BANNER
+# ══════════════════════════════════════════════════════════════════════════════
+echo "============================================================"
+echo "  PowerCore Pipeline Monitor"
+echo "============================================================"
+echo "  Package      : ${PKG_NAME}"
+echo "  CSV file     : ${CSV_NAME}"
+echo "  Runtime      : ${POWERCORE_RUNTIME}"
+echo "  Poll interval: ${POLL_INTERVAL}s  |  Soft timeout: $((TIMEOUT_SECS/60))min"
+echo "============================================================"
+echo ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 1/5 — PRE-PROCESS
+# Wait for 03-preprocess to consume the CSV and create a BRequest dir.
+# BRequest name = BRequest_{date}_{csv_stem}_{uuid8}  (preprocess.generate_task_id)
+# BRequest created in runtime/input/ or runtime/ root (config-dependent).
+# ══════════════════════════════════════════════════════════════════════════════
+CSV_STEM="${CSV_NAME%.csv}"
+
+echo "------------------------------------------------------------"
+echo "  Stage 1/5  Pre-process  [waiting for BRequest creation]"
+echo "------------------------------------------------------------"
+
+while [ -z "$BREQUEST" ]; do
+  if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
+    echo "TIMEOUT (${ELAPSED}s) — Pre-process never created a BRequest"
+    echo "  03-preprocess/inbox:"
+    sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/" 2>/dev/null || true
+    echo "  03-preprocess/processing:"
+    sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/" 2>/dev/null || true
+    echo "  runtime/input/:"
+    sudo -u powercore ls -lh "${POWERCORE_RUNTIME}/input/" 2>/dev/null || true
+    _worker_journal "03-preprocess"
+    exit 1
+  fi
+
+  FOUND=$(
+    {
+      sudo -u powercore find "${POWERCORE_RUNTIME}/input/" \
+        -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
+      sudo -u powercore find "${POWERCORE_RUNTIME}" \
+        -maxdepth 1 -type d -name "BRequest_*" 2>/dev/null
+      sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+        -mindepth 3 -maxdepth 3 -type d -name "BRequest_*" 2>/dev/null
+    } | head -1
+  )
+
+  if [ -n "$FOUND" ]; then
+    BREQUEST=$(basename "$FOUND")
+    REL=$(echo "$FOUND" | sed "s|${POWERCORE_RUNTIME}/||")
+    PREV_LOCATION="$REL"
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    ELAPSED_SEC=$(( ELAPSED % 60 ))
+    echo ""
+    echo "  BRequest created: ${BREQUEST}  [${ELAPSED_MIN}m${ELAPSED_SEC}s]"
+    echo "  Starting location: $(_fmt_location "${REL}")"
+    echo ""
+    if sudo -u powercore test -f "${WFLOG}" 2>/dev/null; then
+      echo "  Pre-process log (last 10 lines):"
+      sudo -u powercore grep -a "03-preprocess\|preprocess\|BRequest" "${WFLOG}" 2>/dev/null \
+        | tail -10 | sed 's/^/    /' || true
+      echo ""
+    fi
+    break
+  fi
+
+  if [ "$(( ELAPSED % 60 ))" -eq 0 ] && [ "${ELAPSED}" -gt 0 ]; then
+    CSV_IN_INBOX="NO"; CSV_IN_PROC="NO"
+    sudo -u powercore test -f \
+      "${POWERCORE_RUNTIME}/queues/03-preprocess/inbox/${CSV_NAME}" \
+      2>/dev/null && CSV_IN_INBOX="YES"
+    sudo -u powercore test -f \
+      "${POWERCORE_RUNTIME}/queues/03-preprocess/processing/${CSV_NAME}" \
+      2>/dev/null && CSV_IN_PROC="YES"
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    echo "  [${ELAPSED_MIN}m] Waiting... CSV in inbox=${CSV_IN_INBOX} processing=${CSV_IN_PROC}"
+    _worker_journal "03-preprocess" 10
+  else
+    echo "  [${ELAPSED}s] Waiting for Pre-process to create BRequest..."
+  fi
+  sleep "${POLL_INTERVAL}"
+  ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+done
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 2–5: Track BRequest through the remaining pipeline stages
+# ══════════════════════════════════════════════════════════════════════════════
+while true; do
+  if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
+    echo ""
+    echo "TIMEOUT (${ELAPSED}s) — pipeline did not complete in time"
+    _dump_all_journals
+    exit 1
+  fi
+
+  # ── SUCCESS ─────────────────────────────────────────────────────────────────
+  if sudo -u powercore test -d "${POWERCORE_RUNTIME}/requests/${BREQUEST}" 2>/dev/null; then
+    RESULT_DIR="${POWERCORE_RUNTIME}/requests/${BREQUEST}"
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    ELAPSED_SEC=$(( ELAPSED % 60 ))
+    echo ""
+    echo "============================================================"
+    echo "  PIPELINE COMPLETE  [${ELAPSED_MIN}m${ELAPSED_SEC}s total]"
+    echo "============================================================"
+    echo "  Package   : ${PKG_NAME}"
+    echo "  BRequest  : ${BREQUEST}"
+    echo "  Result    : ${RESULT_DIR}"
+    echo ""
+    _print_postprocess_summary "${RESULT_DIR}"
+    echo ""
+    # NOTE: bookkeeping deletes all build artefacts (sheet_*/, metadata files)
+    # from requests/BRequest keeping only post_process_summary.json + metadata.json.
+    # validation_summary.json and shallow_results.csv are gone by this point.
+    # Those are printed at stage-transition time (05-deep-scan and 04-shallow-scan).
+    OUTPUT_DIR="${RESULT_DIR}/output"
+    if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
+      echo "  Output Files"
+      echo "  ----------------------------------------"
+      sudo -u powercore find "${OUTPUT_DIR}" -type f | sort | while read -r f; do
+        SIZE=$(sudo -u powercore du -sh "$f" 2>/dev/null | cut -f1)
+        printf "  %-8s  %s\n" "${SIZE}" "${f#${RESULT_DIR}/}"
+      done
+      echo ""
+    fi
+    echo "============================================================"
+    exit 0
+  fi
+
+  # ── ERROR ────────────────────────────────────────────────────────────────────
+  ERROR_FILE=$(sudo -u powercore find "${POWERCORE_RUNTIME}/queues/" \
+    -name ".error" 2>/dev/null | grep "/${BREQUEST}/" | head -1 || true)
+  if [ -n "$ERROR_FILE" ]; then
+    echo ""
+    echo "  ERROR detected in ${BREQUEST}"
+    echo "  .error: ${ERROR_FILE}"
+    sudo -u powercore cat "${ERROR_FILE}" | sed 's/^/  /'
+    CUR_LOCATION=$(_find_brequest)
+    ERR_STAGE=$(echo "$CUR_LOCATION" | grep -oP '\d\d-[a-z-]+' | head -1)
+    [ -n "$ERR_STAGE" ] && _worker_journal "${ERR_STAGE}" 30
+    echo "  (worker will retry — waiting for recovery or timeout)"
+  fi
+
+  # ── LOCATE ───────────────────────────────────────────────────────────────────
+  CUR_LOCATION=$(_find_brequest)
+  if [ -z "$CUR_LOCATION" ]; then
+    sleep 2; ELAPSED=$(( ELAPSED + 2 )); continue
+  fi
+
+  # ── TRANSITION ───────────────────────────────────────────────────────────────
+  if [ "${CUR_LOCATION}" != "${PREV_LOCATION}" ]; then
+    CUR_STAGE=$(echo "$CUR_LOCATION" | grep -oP '\d\d-[a-z-]+' | head -1)
+    CUR_SUB=$(echo "$CUR_LOCATION"   | grep -oP '(?<=/)(inbox|processing|outbox)(?=/)' | head -1)
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    ELAPSED_SEC=$(( ELAPSED % 60 ))
+
+    if [ "${CUR_STAGE}" != "${PREV_STAGE}" ] && [ -n "${CUR_STAGE}" ]; then
+      _section_header "${CUR_STAGE}" "${ELAPSED_MIN}" "${ELAPSED_SEC}"
+
+      # ── Summaries fired on ENTRY into a new stage ────────────────────────
+      # We fire on entry (not exit) because:
+      #  • shallow_scan_metadata.json is written into the BRequest dir which is
+      #    still under queues/05-deep-scan/processing/ when we first see Stage 3
+      #  • validation_summary.json files exist while deep scan runs; bookkeeping
+      #    deletes them on finalisation so we must read before SUCCESS block
+      #  • PREV_STAGE="" on first poll — BRequest already at 04-shallow-scan when
+      #    poller starts — so we can't key on exiting 04-shallow-scan
+      case "${CUR_STAGE}" in
+        05-deep-scan)
+          # Entering deep scan → shallow scan just finished; print its summary
+          echo "  Shallow Scan Summary (completed)"
+          echo "  ----------------------------------------"
+          _print_shallow_summary
+          echo ""
+          ;;
+        06-post-process)
+          # Entering post-process → deep scan just finished; print its results
+          _print_deep_scan_summary
+          echo ""
+          echo "  Deep Scan — Per-Package Results"
+          echo "  ----------------------------------------"
+          _print_deep_scan_results
+          echo ""
+          ;;
+      esac
+
+      PREV_STAGE="${CUR_STAGE}"
+    fi
+
+    echo "  [${ELAPSED_MIN}m${ELAPSED_SEC}s]  $(_fmt_location "${CUR_LOCATION}")"
+    PREV_LOCATION="${CUR_LOCATION}"
+  else
+    # Heartbeat every 60 s
+    if [ "$(( ELAPSED % 60 ))" -eq 0 ] && [ "${ELAPSED}" -gt 0 ]; then
+      ELAPSED_MIN=$(( ELAPSED / 60 ))
+      echo "  ... [${ELAPSED_MIN}m]  $(_fmt_location "${CUR_LOCATION}")"
+    fi
+  fi
+
+  sleep "${POLL_INTERVAL}"
+  ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+done
