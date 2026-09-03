@@ -171,7 +171,7 @@ for candidate in \
   "${PC_HOME}/.config/systemd/user/powercore-worker@.service" \
   "/etc/systemd/user/powercore-worker@.service" \
   "/usr/lib/systemd/user/powercore-worker@.service"; do
-  if sudo test -f "${candidate}" 2>/dev/null; then
+  if sudo -u powercore test -f "${candidate}" 2>/dev/null; then
     UNIT_FILE="${candidate}"
     break
   fi
@@ -196,11 +196,11 @@ echo "--- Unit file: ${UNIT_FILE} ---"
 # This is the most reliable path: no env var timing, no dbus races.
 echo "--- Patching ExecStart in ${UNIT_FILE} ---"
 echo "  Before patch:"
-sudo grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
+sudo -u powercore grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
 # Add --force-rebuild to ExecStart if not already present
-sudo sed -i 's|ExecStart=\(.*powercore-worker\) %i$|ExecStart=\1 %i --force-rebuild|' "${UNIT_FILE}"
+sudo -u powercore sed -i 's|ExecStart=\(.*powercore-worker\) %i$|ExecStart=\1 %i --force-rebuild|' "${UNIT_FILE}"
 echo "  After patch:"
-sudo grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
+sudo -u powercore grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
 echo "--- ExecStart patched ---"
 
 # ── Show effective environment before starting ────────────────────────────────
