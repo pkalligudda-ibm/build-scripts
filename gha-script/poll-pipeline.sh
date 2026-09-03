@@ -135,10 +135,9 @@ _print_shallow_summary() {
   meta=$(sudo -u powercore find "${POWERCORE_RUNTIME}" \
     -name "shallow_scan_metadata.json" 2>/dev/null | head -1)
   if [ -z "$meta" ]; then
-    echo "  [debug] shallow_scan_metadata.json not found under ${POWERCORE_RUNTIME}"
+    echo "  (no shallow_scan_metadata.json found)"
     return
   fi
-  echo "  [debug] shallow_scan_metadata.json: ${meta}"
   local satisfied failed_known noarch rebuild new_pkg lang_unavail
   local pass_deep dur next_st
   # stats live inside the "statistics" nested object — use _json_nested_field
@@ -171,20 +170,27 @@ _print_shallow_summary() {
 
 # ── _print_deep_scan_summary ───────────────────────────────────────────────────
 # progress_reporter.py writes: "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
-# Fallback: run_core._print_summary() individual lines.
+# Fallback: run_core._print_summary() individual lines via workflow.log.
 _print_deep_scan_summary() {
-  [ ! -f "${WFLOG}" ] && { echo "  [debug] workflow.log not found at ${WFLOG}"; return; }
-  echo "  [debug] Reading deep scan summary from ${WFLOG}"
+  if [ ! -f "${WFLOG}" ]; then
+    # workflow.log is written by powercore-worker via RotatingFileHandler.
+    # It may not exist yet for very fast runs or if POWERCORE_RUNTIME env
+    # is different inside the worker.  Check for alternate locations.
+    local alt
+    alt=$(sudo -u powercore find "${POWERCORE_RUNTIME}/logs" \
+      -name "*.log" 2>/dev/null | head -1)
+    [ -z "$alt" ] && return
+    WFLOG="$alt"
+  fi
   local done_line
-  done_line=$(sudo -u powercore grep -a "DONE" "${WFLOG}" 2>/dev/null \
-    | grep -a "elapsed=" | tail -1 || true)
+  done_line=$(sudo -u powercore grep -a "elapsed=" "${WFLOG}" 2>/dev/null \
+    | tail -1 || true)
   if [ -n "$done_line" ]; then
-    echo "  Deep Scan Summary (progress_reporter)"
+    echo "  Deep Scan log line:"
     echo "  ----------------------------------------"
     echo "  ${done_line}"
     echo "  ----------------------------------------"
   else
-    echo "  [debug] No '■ DONE … elapsed=' line found — trying _print_summary fallback"
     local total success failed rate
     total=$(sudo -u powercore grep -a "Total packages:" "${WFLOG}" 2>/dev/null \
       | tail -1 | grep -oP '\d+' || true)
@@ -195,15 +201,13 @@ _print_deep_scan_summary() {
     rate=$(sudo -u powercore grep -a "Success rate:" "${WFLOG}" 2>/dev/null \
       | tail -1 | grep -oP '[\d.]+%' || true)
     if [ -n "$total" ]; then
-      echo "  Deep Scan Summary (run_core fallback)"
+      echo "  Deep Scan Summary"
       echo "  ----------------------------------------"
       echo "  Total     : ${total}"
       echo "  Succeeded : ${success:-?}"
       echo "  Failed    : ${failed:-?}"
       echo "  Rate      : ${rate:-?}"
       echo "  ----------------------------------------"
-    else
-      echo "  [debug] No summary lines found in workflow.log — see validation_summary.json below"
     fi
   fi
 }
@@ -232,7 +236,9 @@ _print_deep_scan_results() {
   done < <(sudo -u powercore find "${POWERCORE_RUNTIME}" \
     -name "validation_summary.json" 2>/dev/null)
   if [ "$found_any" = "false" ]; then
-    echo "  [debug] validation_summary.json not found — trying results_summary.json fallback"
+    # validation_summary.json deleted by bookkeeping — fall back to
+    # results_summary.csv in output/ which survives the cleanup.
+    # If deep scan produced no Docker results at all, also dump the journal.
     _print_results_summary_fallback
   fi
 }
@@ -245,8 +251,13 @@ _print_results_summary_fallback() {
   local csv
   csv=$(sudo -u powercore find "${rdir}/output" \
     -name "results_summary.csv" 2>/dev/null | head -1)
-  [ -z "$csv" ] && { echo "  [debug] results_summary.csv not found either"; return; }
-  echo "  [debug] results_summary.csv: ${csv}"
+  if [ -z "$csv" ]; then
+    echo "  (no build results — deep scan produced no packages)"
+    echo "  Deep Scan worker journal (last 40 lines):"
+    echo "  ----------------------------------------"
+    _worker_journal "05-deep-scan" 40
+    return
+  fi
   sudo -u powercore awk -F',' '
     NR==1 {
       for (i=1;i<=NF;i++) {
