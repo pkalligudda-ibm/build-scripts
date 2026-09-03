@@ -13,6 +13,10 @@ POWERCORE_VERSION="${2:?powercore_version argument required}"
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
 LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
 
+echo "--- Download config ---"
+echo "  POWERCORE_VERSION : ${POWERCORE_VERSION}"
+echo "  BUCKET_URL        : ${BUCKET_URL}"
+
 echo "--- Fetching IAM token ---"
 token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
   -H "content-type: application/x-www-form-urlencoded" \
@@ -32,7 +36,7 @@ fi
 echo "OK: IAM token obtained"
 
 echo "--- Listing COS objects (version: ${POWERCORE_VERSION}) ---"
-echo "List URL: ${LIST_URL}"
+echo "  List URL: ${LIST_URL}"
 
 list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
 curl_status=$?
@@ -54,15 +58,20 @@ if [[ -z "$all_keys" ]]; then
   exit 1
 fi
 
-echo "Available wheel keys:"
-echo "$all_keys"
+echo "--- Available wheel keys ---"
+echo "$all_keys" | sed 's/^/  /'
+echo "  (total: $(echo "$all_keys" | wc -l | tr -d ' ') wheels)"
 
 matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
 if [[ -z "$matched_keys" ]]; then
   echo "ERROR: No wheels matching version '${POWERCORE_VERSION}' in COS."
-  echo "Available: $all_keys"
+  echo "  Available versions:"
+  echo "$all_keys" | grep -oP '\d+\.\d+\.\d+' | sort -u | sed 's/^/    /' || true
   exit 1
 fi
+
+echo "--- Matched wheels for version ${POWERCORE_VERSION} ---"
+echo "$matched_keys" | sed 's/^/  /'
 
 echo "--- Downloading matched wheels ---"
 mkdir -p powercore-wheels
@@ -75,9 +84,10 @@ while IFS= read -r wheel_key; do
     echo "ERROR: Failed to download wheel '${wheel_key}'"
     exit 1
   fi
+  echo "    OK: $(ls -lh "powercore-wheels/$(basename "$wheel_key")" | awk '{print $5}')"
 done <<< "$matched_keys"
 
-echo "Downloaded wheels:"
+echo "--- Downloaded wheels ---"
 ls -lh powercore-wheels/
 
 echo "--- Downloading powercore-config.env ---"
@@ -85,7 +95,8 @@ if ! curl -fsS -H "Authorization: bearer $token" \
   -o "powercore-config.env" \
   "${BUCKET_URL}/powercore-config.env"; then
   echo "ERROR: Failed to download powercore-config.env"
+  echo "  Tried: ${BUCKET_URL}/powercore-config.env"
   exit 1
 fi
-echo "powercore-config.env contents:"
-cat powercore-config.env
+echo "--- powercore-config.env (safe view — key names only) ---"
+grep -E '^[A-Z_]+=' powercore-config.env | sed 's/=.*/=<hidden>/' || true
