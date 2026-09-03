@@ -253,6 +253,108 @@ _print_deep_scan_results() {
   fi
 }
 
+# ── _print_failure_logs ────────────────────────────────────────────────────────
+# For every failed/errored package in the BRequest, print the Docker build log
+# so developers can pinpoint the failure without digging into artifacts.
+#
+# Looks for logs in priority order:
+#   1. output/artifacts/logs/docker_package.log.gz  (gzipped, post-bookkeeping)
+#   2. output/artifacts/logs/docker_package.log     (plain, during processing)
+#   3. output/logs/*.log                             (any log in output/logs/)
+#   4. Deep scan worker journal (last resort)
+_print_failure_logs() {
+  local result_dir="$1"
+  local found_failure=false
+
+  # Find all packages with a non-success status in results_summary.csv
+  local csv
+  csv=$(sudo -u powercore find "${result_dir}" \
+    -name "results_summary.csv" 2>/dev/null | head -1)
+
+  # Collect failed package names from CSV (status != BUILD_SUCCESS)
+  local failed_pkgs=""
+  if [ -n "${csv}" ]; then
+    failed_pkgs=$(sudo -u powercore awk -F',' '
+      NR==1 {
+        for (i=1;i<=NF;i++) {
+          gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+          if ($i=="package_name"||$i=="name") ni=i
+          if ($i=="status") si=i
+        }
+        next
+      }
+      NF>1 {
+        gsub(/\r/,"")
+        s=(si?$si:""); n=(ni?$ni:"?")
+        if (s != "BUILD_SUCCESS" && s != "SATISFIED") print n
+      }
+    ' "${csv}" 2>/dev/null || true)
+  fi
+
+  if [ -z "${failed_pkgs}" ]; then
+    # No CSV or all succeeded — nothing to dump
+    return
+  fi
+
+  echo ""
+  echo "  ════════════════════════════════════════════════════════════"
+  echo "  Build Failure Logs"
+  echo "  ════════════════════════════════════════════════════════════"
+
+  while IFS= read -r pkg; do
+    [ -z "${pkg}" ] && continue
+    found_failure=true
+    echo ""
+    echo "  ── Package: ${pkg} ──────────────────────────────────────────"
+
+    # Search for docker build logs for this package
+    local log_gz log_plain log_dir
+    log_gz=$(sudo -u powercore find "${result_dir}" \
+      -path "*/${pkg}*/docker_package.log.gz" 2>/dev/null | head -1)
+    log_plain=$(sudo -u powercore find "${result_dir}" \
+      -path "*/${pkg}*/docker_package.log" 2>/dev/null | head -1)
+    log_dir=$(sudo -u powercore find "${result_dir}" \
+      -path "*/${pkg}*/logs" -type d 2>/dev/null | head -1)
+
+    if [ -n "${log_gz}" ]; then
+      echo "  Log: ${log_gz##*/result_dir/} (gzipped)"
+      echo "  ----------------------------------------"
+      sudo -u powercore zcat "${log_gz}" 2>/dev/null \
+        | tail -100 | sed 's/^/  /' || true
+    elif [ -n "${log_plain}" ]; then
+      echo "  Log: ${log_plain##*/result_dir/}"
+      echo "  ----------------------------------------"
+      sudo -u powercore tail -100 "${log_plain}" 2>/dev/null \
+        | sed 's/^/  /' || true
+    elif [ -n "${log_dir}" ]; then
+      echo "  Logs dir: ${log_dir}"
+      echo "  ----------------------------------------"
+      sudo -u powercore find "${log_dir}" -type f 2>/dev/null \
+        | sort | while IFS= read -r lf; do
+          echo "  --- $(basename "${lf}") ---"
+          if echo "${lf}" | grep -q '\.gz$'; then
+            sudo -u powercore zcat "${lf}" 2>/dev/null | tail -50 | sed 's/^/  /' || true
+          else
+            sudo -u powercore tail -50 "${lf}" 2>/dev/null | sed 's/^/  /' || true
+          fi
+        done
+    else
+      echo "  (no docker build log found for ${pkg})"
+      echo "  Searching BRequest tree for any logs..."
+      sudo -u powercore find "${result_dir}" \
+        -path "*/${pkg}*" -name "*.log*" 2>/dev/null \
+        | head -10 | sed 's/^/    /' || true
+    fi
+  done <<< "${failed_pkgs}"
+
+  if [ "${found_failure}" = "true" ]; then
+    echo ""
+    echo "  ── Deep Scan worker journal (last 50 lines) ─────────────────"
+    _worker_journal "05-deep-scan" 50
+  fi
+  echo "  ════════════════════════════════════════════════════════════"
+}
+
 # ── _print_results_summary_fallback ───────────────────────────────────────────
 # Reads results_summary.csv written by post-process (survives bookkeeping).
 # Searched across POWERCORE_RUNTIME so it works whether BRequest is still in
@@ -494,13 +596,11 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
-    # validation_summary.json deleted by bookkeeping — _print_deep_scan_results
-    # automatically falls back to results_summary.csv which lives in output/ and
-    # survives.  If both were already printed at stage-transition time, this is a
-    # no-op (validation_summary.json returns false, fallback reads the same CSV).
     echo "  Deep Scan — Per-Package Results"
     echo "  ----------------------------------------"
     _print_deep_scan_results
+    # Surface build logs for any failed packages
+    _print_failure_logs "${RESULT_DIR}"
     echo ""
     OUTPUT_DIR="${RESULT_DIR}/output"
     if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
