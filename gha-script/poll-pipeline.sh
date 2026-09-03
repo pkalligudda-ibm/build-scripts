@@ -32,7 +32,9 @@ PREV_STAGE=""
 POWERCORE_UID=$(id -u powercore 2>/dev/null || echo "")
 XDG_DIR="/run/user/${POWERCORE_UID}"
 DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
-WFLOG="${POWERCORE_RUNTIME}/logs/workflow.log"
+# Deep scan writes to deep-scan.log via LOGGING config in config.py.
+# Fall back to any *.log under logs/ if that specific file is absent.
+WFLOG="${POWERCORE_RUNTIME}/logs/deep-scan.log"
 
 # ── _find_brequest ─────────────────────────────────────────────────────────────
 # Returns the BRequest path relative to POWERCORE_RUNTIME.
@@ -169,19 +171,23 @@ _print_shallow_summary() {
 }
 
 # ── _print_deep_scan_summary ───────────────────────────────────────────────────
-# progress_reporter.py writes: "■ DONE  N/T ✓  F ✗  elapsed=Xm Ys  success=Z%"
-# Fallback: run_core._print_summary() individual lines via workflow.log.
+# Deep Scan writes summaries to deep-scan.log (config.py LOGGING["file"]).
+# Fallback: any *.log in the logs/ directory.
 _print_deep_scan_summary() {
   if [ ! -f "${WFLOG}" ]; then
-    # workflow.log is written by powercore-worker via RotatingFileHandler.
-    # It may not exist yet for very fast runs or if POWERCORE_RUNTIME env
-    # is different inside the worker.  Check for alternate locations.
+    # deep-scan.log may not exist yet for very fast runs or if the log path
+    # differs inside the worker.  Search for any *.log under the logs dir.
     local alt
     alt=$(sudo -u powercore find "${POWERCORE_RUNTIME}/logs" \
       -name "*.log" 2>/dev/null | head -1)
-    [ -z "$alt" ] && return
+    if [ -z "$alt" ]; then
+      echo "  (no log files found under ${POWERCORE_RUNTIME}/logs)"
+      return
+    fi
+    echo "  NOTE: ${WFLOG} not found — using ${alt}"
     WFLOG="$alt"
   fi
+  echo "  Log file: ${WFLOG}"
   local done_line
   done_line=$(sudo -u powercore grep -a "elapsed=" "${WFLOG}" 2>/dev/null \
     | tail -1 || true)
@@ -363,7 +369,20 @@ echo "  Package      : ${PKG_NAME}"
 echo "  CSV file     : ${CSV_NAME}"
 echo "  Runtime      : ${POWERCORE_RUNTIME}"
 echo "  Poll interval: ${POLL_INTERVAL}s  |  Soft timeout: $((TIMEOUT_SECS/60))min"
+echo "  Deep scan log: ${WFLOG}"
 echo "============================================================"
+
+echo "--- Runtime directory state at startup ---"
+sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 3 -type d 2>/dev/null | sort | head -30 \
+  || echo "  (could not list runtime tree)"
+echo ""
+
+echo "--- Worker status at startup ---"
+for _s in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
+  _st=$(sudo -u powercore XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+    systemctl --user is-active "powercore-worker@${_s}.service" 2>/dev/null || true)
+  echo "  powercore-worker@${_s}: ${_st}"
+done
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -446,6 +465,16 @@ while true; do
   if [ "${ELAPSED}" -ge "${TIMEOUT_SECS}" ]; then
     echo ""
     echo "TIMEOUT (${ELAPSED}s) — pipeline did not complete in time"
+    echo ""
+    echo "--- Runtime snapshot at timeout ---"
+    echo "  BRequest: ${BREQUEST}"
+    echo "  Current location: $(_find_brequest || echo 'not found')"
+    echo ""
+    echo "  BRequest files:"
+    sudo -u powercore find "${POWERCORE_RUNTIME}" \
+      -path "*/${BREQUEST}/*" -not -path "*/\.*" 2>/dev/null \
+      | sort | head -40 | sed 's/^/    /' || true
+    echo ""
     _dump_all_journals
     exit 1
   fi
