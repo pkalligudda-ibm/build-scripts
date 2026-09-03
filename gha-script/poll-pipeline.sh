@@ -647,6 +647,21 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
+    echo "  Deep Scan Log — First 50 Lines"
+    echo "  ----------------------------------------"
+    if sudo -u powercore test -f "${WFLOG}" 2>/dev/null; then
+      sudo -u powercore head -50 "${WFLOG}" 2>/dev/null | sed 's/^/  /' || true
+    else
+      _alt=$(sudo -u powercore find "${POWERCORE_RUNTIME}/logs" \
+        -name "*.log" 2>/dev/null | head -1)
+      if [ -n "${_alt}" ]; then
+        echo "  NOTE: ${WFLOG} not found — using ${_alt}"
+        sudo -u powercore head -50 "${_alt}" 2>/dev/null | sed 's/^/  /' || true
+      else
+        echo "  (no deep-scan log found)"
+      fi
+    fi
+    echo ""
     echo "  Deep Scan — Container Images Used"
     echo "  ----------------------------------------"
     _print_image_pull_info
