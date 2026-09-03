@@ -24,10 +24,36 @@ POWERCORE_UID=$(id -u powercore)
 XDG_DIR="/run/user/${POWERCORE_UID}"
 DBUS="unix:path=/run/user/${POWERCORE_UID}/bus"
 PC_HOME=$(getent passwd powercore | cut -d: -f6)
+SYSTEMD_ENV="${PC_HOME}/powercore/runtime/config/systemd.env"
 WORKFLOW_ENV="${PC_HOME}/powercore/runtime/config/workflow.env"
 
 echo "--- powercore UID: ${POWERCORE_UID} ---"
 echo "--- XDG_RUNTIME_DIR: ${XDG_DIR} ---"
+
+# ── Patch POWERCORE_REGISTRY and POWERCORE_IMAGE_TAG into systemd.env ─────────
+# powercore-install writes these vars as empty strings because the config values
+# aren't in its environment — they live in powercore-config.env which is only
+# sourced here. Without this patch the worker falls back to env.sh's default:
+#   POWERCORE_REGISTRY=localhost:5000  (image not present on a fresh runner)
+# We read the values from powercore-config.env (downloaded alongside wheels) and
+# write them directly into systemd.env before daemon-reload.
+CONFIG_ENV="$(pwd)/powercore-config.env"
+if [ -f "${CONFIG_ENV}" ]; then
+  _reg=$(grep -m1 '^POWERCORE_REGISTRY=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _tag=$(grep -m1 '^POWERCORE_IMAGE_TAG=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  if [ -n "${_reg}" ] && [ -f "${SYSTEMD_ENV}" ]; then
+    sudo -u powercore sed -i "s|^POWERCORE_REGISTRY=.*|POWERCORE_REGISTRY=${_reg}|" "${SYSTEMD_ENV}"
+    echo "--- Patched POWERCORE_REGISTRY=${_reg} into systemd.env ---"
+  fi
+  if [ -n "${_tag}" ] && [ -f "${SYSTEMD_ENV}" ]; then
+    sudo -u powercore sed -i "s|^POWERCORE_IMAGE_TAG=.*|POWERCORE_IMAGE_TAG=${_tag}|" "${SYSTEMD_ENV}"
+    echo "--- Patched POWERCORE_IMAGE_TAG=${_tag} into systemd.env ---"
+  fi
+  echo "--- systemd.env registry/image lines ---"
+  sudo -u powercore grep -E '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=' "${SYSTEMD_ENV}" || true
+else
+  echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry not patched"
+fi
 
 # ── Write workflow.env FIRST — before any systemd interaction ─────────────────
 # This must happen before start so workers read the fresh env at launch.
