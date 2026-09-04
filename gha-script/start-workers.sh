@@ -97,6 +97,7 @@ sudo -u powercore cat "${SYSTEMD_ENV}" | grep -v '^#\|^$' | head -30 || true
 _reg=""; _tag=""; _icr_key=""
 _couchdb_url=""; _couchdb_user=""; _couchdb_pass=""
 _build_scripts=""
+_cos_wheels_bucket=""; _cos_sbom_bucket=""
 if [ -f "${CONFIG_ENV}" ]; then
   # Primary: ICR_* keys (always set in powercore-config.env)
   _icr_reg=$(grep -m1 '^ICR_REGISTRY='  "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
@@ -117,19 +118,26 @@ if [ -f "${CONFIG_ENV}" ]; then
   # systemd.env/workflow.env the worker inherits env.sh's default ($WORKSPACE/build-scripts)
   # which is the wrong directory.
   _build_scripts=$(grep -m1 '^POWERCORE_BUILD_SCRIPTS=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  # COS bucket names — Bookkeeping reads these to decide where to upload wheels
+  # and SBOMs.  Without patching them in, the worker falls back to hardcoded
+  # defaults ('powercore-wheels-staging' / 'powercore-sbom') which may be wrong.
+  _cos_wheels_bucket=$(grep -m1 '^POWERCORE_COS_WHEELS_BUCKET=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _cos_sbom_bucket=$(grep -m1   '^POWERCORE_COS_SBOM_BUCKET='   "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   echo "--- Registry config from powercore-config.env ---"
   echo "  ICR_REGISTRY  (primary)  = ${_icr_reg}"
   echo "  ICR_IMAGE_TAG (primary)  = ${_icr_tag}"
   echo "  POWERCORE_REGISTRY  (fb) = ${_pc_reg}"
   echo "  POWERCORE_IMAGE_TAG (fb) = ${_pc_tag}"
-  echo "  Resolved POWERCORE_REGISTRY  = ${_reg}"
-  echo "  Resolved POWERCORE_IMAGE_TAG = ${_tag}"
-  echo "  ICR_API_KEY              = ${_icr_key:0:8}***"
-  echo "  POWERCORE_BUILD_SCRIPTS  = ${_build_scripts}"
-  echo "  COUCHDB_URL              = ${_couchdb_url}"
-  echo "  COUCHDB_USERNAME         = ${_couchdb_user}"
+  echo "  Resolved POWERCORE_REGISTRY       = ${_reg}"
+  echo "  Resolved POWERCORE_IMAGE_TAG      = ${_tag}"
+  echo "  ICR_API_KEY                       = ${_icr_key:0:8}***"
+  echo "  POWERCORE_BUILD_SCRIPTS           = ${_build_scripts}"
+  echo "  POWERCORE_COS_WHEELS_BUCKET       = ${_cos_wheels_bucket}"
+  echo "  POWERCORE_COS_SBOM_BUCKET         = ${_cos_sbom_bucket}"
+  echo "  COUCHDB_URL                       = ${_couchdb_url}"
+  echo "  COUCHDB_USERNAME                  = ${_couchdb_user}"
 else
-  echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry/CouchDB/build-scripts not patched"
+  echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry/CouchDB/build-scripts/COS buckets not patched"
 fi
 
 # ── Helper: set/replace a KEY=VALUE line in an env file ───────────────────────
@@ -149,16 +157,18 @@ _set_env_var() {
 
 # ── Patch systemd.env ─────────────────────────────────────────────────────────
 if [ -f "${SYSTEMD_ENV}" ]; then
-  [ -n "${_reg}"           ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_REGISTRY"        "${_reg}"
-  [ -n "${_tag}"           ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_IMAGE_TAG"       "${_tag}"
-  [ -n "${_icr_key}"       ] && _set_env_var "${SYSTEMD_ENV}" "ICR_API_KEY"               "${_icr_key}"
-  [ -n "${_couchdb_url}"   ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_URL"               "${_couchdb_url}"
-  [ -n "${_couchdb_user}"  ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_USERNAME"          "${_couchdb_user}"
-  [ -n "${_couchdb_pass}"  ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_PASSWORD"          "${_couchdb_pass}"
-  [ -n "${_build_scripts}" ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_BUILD_SCRIPTS"   "${_build_scripts}"
+  [ -n "${_reg}"                ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_REGISTRY"              "${_reg}"
+  [ -n "${_tag}"                ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_IMAGE_TAG"             "${_tag}"
+  [ -n "${_icr_key}"            ] && _set_env_var "${SYSTEMD_ENV}" "ICR_API_KEY"                     "${_icr_key}"
+  [ -n "${_couchdb_url}"        ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_URL"                     "${_couchdb_url}"
+  [ -n "${_couchdb_user}"       ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_USERNAME"                "${_couchdb_user}"
+  [ -n "${_couchdb_pass}"       ] && _set_env_var "${SYSTEMD_ENV}" "COUCHDB_PASSWORD"                "${_couchdb_pass}"
+  [ -n "${_build_scripts}"      ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_BUILD_SCRIPTS"         "${_build_scripts}"
+  [ -n "${_cos_wheels_bucket}"  ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_WHEELS_BUCKET"     "${_cos_wheels_bucket}"
+  [ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
   echo "--- systemd.env after patch ---"
   sudo -u powercore grep -E \
-    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=' \
+    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=' \
     "${SYSTEMD_ENV}" || true
 fi
 
@@ -168,19 +178,21 @@ sudo -u powercore mkdir -p "${CONFIG_DIR}"
 sudo -u powercore touch "${WORKFLOW_ENV}" 2>/dev/null || true
 sudo -u powercore sed -i '/^POWERCORE_FORCE_REBUILD=/d' "${WORKFLOW_ENV}" 2>/dev/null || true
 echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}" > /dev/null
-# Patch registry, ICR credentials, CouchDB, and build-scripts path into workflow.env
-# (loaded last in EnvironmentFile= chain → wins over systemd.env)
-[ -n "${_reg}"           ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_REGISTRY"        "${_reg}"
-[ -n "${_tag}"           ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_IMAGE_TAG"       "${_tag}"
-[ -n "${_icr_key}"       ] && _set_env_var "${WORKFLOW_ENV}" "ICR_API_KEY"               "${_icr_key}"
-[ -n "${_couchdb_url}"   ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_URL"               "${_couchdb_url}"
-[ -n "${_couchdb_user}"  ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_USERNAME"          "${_couchdb_user}"
-[ -n "${_couchdb_pass}"  ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_PASSWORD"          "${_couchdb_pass}"
-[ -n "${_build_scripts}" ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_BUILD_SCRIPTS"   "${_build_scripts}"
+# Patch registry, ICR credentials, CouchDB, build-scripts, and COS bucket names
+# into workflow.env (loaded last in EnvironmentFile= chain → wins over systemd.env)
+[ -n "${_reg}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_REGISTRY"              "${_reg}"
+[ -n "${_tag}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_IMAGE_TAG"             "${_tag}"
+[ -n "${_icr_key}"            ] && _set_env_var "${WORKFLOW_ENV}" "ICR_API_KEY"                     "${_icr_key}"
+[ -n "${_couchdb_url}"        ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_URL"                     "${_couchdb_url}"
+[ -n "${_couchdb_user}"       ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_USERNAME"                "${_couchdb_user}"
+[ -n "${_couchdb_pass}"       ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_PASSWORD"                "${_couchdb_pass}"
+[ -n "${_build_scripts}"      ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_BUILD_SCRIPTS"         "${_build_scripts}"
+[ -n "${_cos_wheels_bucket}"  ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_WHEELS_BUCKET"     "${_cos_wheels_bucket}"
+[ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
 
 echo "--- workflow.env after patch ---"
 sudo -u powercore grep -E \
-  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=' \
+  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=' \
   "${WORKFLOW_ENV}" || true
 
 # Helper: run a systemctl command as the powercore user
