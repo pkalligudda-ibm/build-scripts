@@ -132,7 +132,11 @@ if [ -f "${CONFIG_ENV}" ]; then
   # bookkeeping.py line 304: cos_endpoint = POWERCORE_COS_ENDPOINT
   _cos_api_key=$(grep -m1      '^COS_API_KEY='           "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   _cos_instance_crn=$(grep -m1 '^COS_INSTANCE_CRN='      "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  # bookkeeping.py reads POWERCORE_COS_ENDPOINT; config files often use COS_ENDPOINT
+  # — accept both names, POWERCORE_COS_ENDPOINT wins if both are present.
   _cos_endpoint=$(grep -m1     '^POWERCORE_COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  [ -z "${_cos_endpoint}" ] && \
+    _cos_endpoint=$(grep -m1   '^COS_ENDPOINT='           "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   # If no dedicated COS API key, fall back to the ICR API key — both are IBM Cloud
   # IAM keys and the same key often has access to both ICR and COS.
   [ -z "${_cos_api_key}" ] && _cos_api_key="${_icr_key}"
