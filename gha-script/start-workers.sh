@@ -98,6 +98,7 @@ _reg=""; _tag=""; _icr_key=""
 _couchdb_url=""; _couchdb_user=""; _couchdb_pass=""
 _build_scripts=""
 _cos_wheels_bucket=""; _cos_sbom_bucket=""
+_cos_api_key=""; _cos_instance_crn=""; _cos_endpoint=""
 if [ -f "${CONFIG_ENV}" ]; then
   # Primary: ICR_* keys (always set in powercore-config.env)
   _icr_reg=$(grep -m1 '^ICR_REGISTRY='  "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
@@ -123,7 +124,19 @@ if [ -f "${CONFIG_ENV}" ]; then
   # defaults ('powercore-wheels-staging' / 'powercore-sbom') which may be wrong.
   _cos_wheels_bucket=$(grep -m1 '^POWERCORE_COS_WHEELS_BUCKET=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   _cos_sbom_bucket=$(grep -m1   '^POWERCORE_COS_SBOM_BUCKET='   "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  echo "--- Registry config from powercore-config.env ---"
+  # COS upload credentials + endpoint — ALL THREE are required by bookkeeping.py
+  # before it calls upload_cos_artifacts().  If any is missing the upload is
+  # silently skipped with a "⚠ Skipping COS artifact uploads" warning.
+  # bookkeeping.py line 302: cos_api_key = IBMCLOUD_API_KEY or COS_API_KEY
+  # bookkeeping.py line 303: cos_instance_crn = COS_INSTANCE_CRN
+  # bookkeeping.py line 304: cos_endpoint = POWERCORE_COS_ENDPOINT
+  _cos_api_key=$(grep -m1      '^COS_API_KEY='           "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _cos_instance_crn=$(grep -m1 '^COS_INSTANCE_CRN='      "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _cos_endpoint=$(grep -m1     '^POWERCORE_COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  # If no dedicated COS API key, fall back to the ICR API key — both are IBM Cloud
+  # IAM keys and the same key often has access to both ICR and COS.
+  [ -z "${_cos_api_key}" ] && _cos_api_key="${_icr_key}"
+  echo "--- Config from powercore-config.env ---"
   echo "  ICR_REGISTRY  (primary)  = ${_icr_reg}"
   echo "  ICR_IMAGE_TAG (primary)  = ${_icr_tag}"
   echo "  POWERCORE_REGISTRY  (fb) = ${_pc_reg}"
@@ -134,10 +147,13 @@ if [ -f "${CONFIG_ENV}" ]; then
   echo "  POWERCORE_BUILD_SCRIPTS           = ${_build_scripts}"
   echo "  POWERCORE_COS_WHEELS_BUCKET       = ${_cos_wheels_bucket}"
   echo "  POWERCORE_COS_SBOM_BUCKET         = ${_cos_sbom_bucket}"
+  echo "  COS_API_KEY (resolved)            = ${_cos_api_key:0:8}***"
+  echo "  COS_INSTANCE_CRN                  = ${_cos_instance_crn:0:40}..."
+  echo "  POWERCORE_COS_ENDPOINT            = ${_cos_endpoint}"
   echo "  COUCHDB_URL                       = ${_couchdb_url}"
   echo "  COUCHDB_USERNAME                  = ${_couchdb_user}"
 else
-  echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry/CouchDB/build-scripts/COS buckets not patched"
+  echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry/CouchDB/build-scripts/COS not patched"
 fi
 
 # ── Helper: set/replace a KEY=VALUE line in an env file ───────────────────────
@@ -166,9 +182,12 @@ if [ -f "${SYSTEMD_ENV}" ]; then
   [ -n "${_build_scripts}"      ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_BUILD_SCRIPTS"         "${_build_scripts}"
   [ -n "${_cos_wheels_bucket}"  ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_WHEELS_BUCKET"     "${_cos_wheels_bucket}"
   [ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
+  [ -n "${_cos_api_key}"        ] && _set_env_var "${SYSTEMD_ENV}" "COS_API_KEY"                     "${_cos_api_key}"
+  [ -n "${_cos_instance_crn}"   ] && _set_env_var "${SYSTEMD_ENV}" "COS_INSTANCE_CRN"                "${_cos_instance_crn}"
+  [ -n "${_cos_endpoint}"       ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_ENDPOINT"          "${_cos_endpoint}"
   echo "--- systemd.env after patch ---"
   sudo -u powercore grep -E \
-    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=' \
+    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^POWERCORE_COS_ENDPOINT=' \
     "${SYSTEMD_ENV}" || true
 fi
 
@@ -178,8 +197,8 @@ sudo -u powercore mkdir -p "${CONFIG_DIR}"
 sudo -u powercore touch "${WORKFLOW_ENV}" 2>/dev/null || true
 sudo -u powercore sed -i '/^POWERCORE_FORCE_REBUILD=/d' "${WORKFLOW_ENV}" 2>/dev/null || true
 echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}" > /dev/null
-# Patch registry, ICR credentials, CouchDB, build-scripts, and COS bucket names
-# into workflow.env (loaded last in EnvironmentFile= chain → wins over systemd.env)
+# Patch all credentials, bucket names, and endpoint into workflow.env
+# (loaded last in EnvironmentFile= chain → wins over systemd.env)
 [ -n "${_reg}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_REGISTRY"              "${_reg}"
 [ -n "${_tag}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_IMAGE_TAG"             "${_tag}"
 [ -n "${_icr_key}"            ] && _set_env_var "${WORKFLOW_ENV}" "ICR_API_KEY"                     "${_icr_key}"
@@ -189,10 +208,13 @@ echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}"
 [ -n "${_build_scripts}"      ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_BUILD_SCRIPTS"         "${_build_scripts}"
 [ -n "${_cos_wheels_bucket}"  ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_WHEELS_BUCKET"     "${_cos_wheels_bucket}"
 [ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
+[ -n "${_cos_api_key}"        ] && _set_env_var "${WORKFLOW_ENV}" "COS_API_KEY"                     "${_cos_api_key}"
+[ -n "${_cos_instance_crn}"   ] && _set_env_var "${WORKFLOW_ENV}" "COS_INSTANCE_CRN"                "${_cos_instance_crn}"
+[ -n "${_cos_endpoint}"       ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_ENDPOINT"          "${_cos_endpoint}"
 
 echo "--- workflow.env after patch ---"
 sudo -u powercore grep -E \
-  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=' \
+  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^POWERCORE_COS_ENDPOINT=' \
   "${WORKFLOW_ENV}" || true
 
 # Helper: run a systemctl command as the powercore user
