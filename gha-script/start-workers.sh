@@ -127,16 +127,15 @@ if [ -f "${CONFIG_ENV}" ]; then
   # COS upload credentials + endpoint — ALL THREE are required by bookkeeping.py
   # before it calls upload_cos_artifacts().  If any is missing the upload is
   # silently skipped with a "⚠ Skipping COS artifact uploads" warning.
-  # bookkeeping.py line 302: cos_api_key = IBMCLOUD_API_KEY or COS_API_KEY
-  # bookkeeping.py line 303: cos_instance_crn = COS_INSTANCE_CRN
-  # bookkeeping.py line 304: cos_endpoint = POWERCORE_COS_ENDPOINT
-  _cos_api_key=$(grep -m1      '^COS_API_KEY='           "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  _cos_instance_crn=$(grep -m1 '^COS_INSTANCE_CRN='      "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  # bookkeeping.py reads POWERCORE_COS_ENDPOINT; config files often use COS_ENDPOINT
-  # — accept both names, POWERCORE_COS_ENDPOINT wins if both are present.
-  _cos_endpoint=$(grep -m1     '^POWERCORE_COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  [ -z "${_cos_endpoint}" ] && \
-    _cos_endpoint=$(grep -m1   '^COS_ENDPOINT='           "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  # bookkeeping.py: cos_api_key = COS_API_KEY, cos_instance_crn = COS_INSTANCE_CRN
+  # bookkeeping.py: cos_endpoint = POWERCORE_COS_ENDPOINT or COS_ENDPOINT (both accepted)
+  # Config sets both to the same value — read COS_ENDPOINT, patch both names into env files.
+  _cos_api_key=$(grep -m1      '^COS_API_KEY='      "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _cos_instance_crn=$(grep -m1 '^COS_INSTANCE_CRN=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _cos_endpoint=$(grep -m1     '^COS_ENDPOINT='     "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  # Prefer POWERCORE_COS_ENDPOINT if explicitly set, fall back to COS_ENDPOINT
+  _pcore_cos_endpoint=$(grep -m1 '^POWERCORE_COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  [ -n "${_pcore_cos_endpoint}" ] && _cos_endpoint="${_pcore_cos_endpoint}"
   # If no dedicated COS API key, fall back to the ICR API key — both are IBM Cloud
   # IAM keys and the same key often has access to both ICR and COS.
   [ -z "${_cos_api_key}" ] && _cos_api_key="${_icr_key}"
@@ -153,7 +152,7 @@ if [ -f "${CONFIG_ENV}" ]; then
   echo "  POWERCORE_COS_SBOM_BUCKET         = ${_cos_sbom_bucket}"
   echo "  COS_API_KEY (resolved)            = ${_cos_api_key:0:8}***"
   echo "  COS_INSTANCE_CRN                  = ${_cos_instance_crn:0:40}..."
-  echo "  POWERCORE_COS_ENDPOINT            = ${_cos_endpoint}"
+  echo "  COS_ENDPOINT / POWERCORE_COS_ENDPOINT = ${_cos_endpoint}"
   echo "  COUCHDB_URL                       = ${_couchdb_url}"
   echo "  COUCHDB_USERNAME                  = ${_couchdb_user}"
 else
@@ -188,10 +187,13 @@ if [ -f "${SYSTEMD_ENV}" ]; then
   [ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
   [ -n "${_cos_api_key}"        ] && _set_env_var "${SYSTEMD_ENV}" "COS_API_KEY"                     "${_cos_api_key}"
   [ -n "${_cos_instance_crn}"   ] && _set_env_var "${SYSTEMD_ENV}" "COS_INSTANCE_CRN"                "${_cos_instance_crn}"
-  [ -n "${_cos_endpoint}"       ] && _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_ENDPOINT"          "${_cos_endpoint}"
+  if [ -n "${_cos_endpoint}" ]; then
+    _set_env_var "${SYSTEMD_ENV}" "COS_ENDPOINT"             "${_cos_endpoint}"
+    _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
+  fi
   echo "--- systemd.env after patch ---"
   sudo -u powercore grep -E \
-    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^POWERCORE_COS_ENDPOINT=' \
+    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^COS_ENDPOINT=|^POWERCORE_COS_ENDPOINT=' \
     "${SYSTEMD_ENV}" || true
 fi
 
@@ -214,11 +216,14 @@ echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}"
 [ -n "${_cos_sbom_bucket}"    ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_SBOM_BUCKET"       "${_cos_sbom_bucket}"
 [ -n "${_cos_api_key}"        ] && _set_env_var "${WORKFLOW_ENV}" "COS_API_KEY"                     "${_cos_api_key}"
 [ -n "${_cos_instance_crn}"   ] && _set_env_var "${WORKFLOW_ENV}" "COS_INSTANCE_CRN"                "${_cos_instance_crn}"
-[ -n "${_cos_endpoint}"       ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_ENDPOINT"          "${_cos_endpoint}"
+if [ -n "${_cos_endpoint}" ]; then
+  _set_env_var "${WORKFLOW_ENV}" "COS_ENDPOINT"             "${_cos_endpoint}"
+  _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
+fi
 
 echo "--- workflow.env after patch ---"
 sudo -u powercore grep -E \
-  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^POWERCORE_COS_ENDPOINT=' \
+  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^COS_ENDPOINT=|^POWERCORE_COS_ENDPOINT=' \
   "${WORKFLOW_ENV}" || true
 
 # Helper: run a systemctl command as the powercore user
