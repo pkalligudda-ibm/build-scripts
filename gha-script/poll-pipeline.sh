@@ -647,21 +647,6 @@ while true; do
     echo ""
     _print_postprocess_summary "${RESULT_DIR}"
     echo ""
-    echo "  Deep Scan Log — First 50 Lines"
-    echo "  ----------------------------------------"
-    if sudo -u powercore test -f "${WFLOG}" 2>/dev/null; then
-      sudo -u powercore head -50 "${WFLOG}" 2>/dev/null | sed 's/^/  /' || true
-    else
-      _alt=$(sudo -u powercore find "${POWERCORE_RUNTIME}/logs" \
-        -name "*.log" 2>/dev/null | head -1)
-      if [ -n "${_alt}" ]; then
-        echo "  NOTE: ${WFLOG} not found — using ${_alt}"
-        sudo -u powercore head -50 "${_alt}" 2>/dev/null | sed 's/^/  /' || true
-      else
-        echo "  (no deep-scan log found)"
-      fi
-    fi
-    echo ""
     echo "  Deep Scan — Container Images Used"
     echo "  ----------------------------------------"
     _print_image_pull_info
@@ -672,9 +657,21 @@ while true; do
     # Surface build logs for any failed packages
     _print_failure_logs "${RESULT_DIR}"
     echo ""
-    echo "  Deep Scan — Full Worker Journal"
-    echo "  ----------------------------------------"
-    _dump_deep_scan_journal
+    echo "  ════════════════════════════════════════════════════════════"
+    echo "  Post-Process Worker Journal"
+    echo "  ════════════════════════════════════════════════════════════"
+    sudo -u powercore \
+      XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+      journalctl --user -u "powercore-worker@06-post-process.service" \
+        --no-pager 2>/dev/null || true
+    echo ""
+    echo "  ════════════════════════════════════════════════════════════"
+    echo "  Bookkeeping Worker Journal"
+    echo "  ════════════════════════════════════════════════════════════"
+    sudo -u powercore \
+      XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
+      journalctl --user -u "powercore-worker@07-bookkeeping.service" \
+        --no-pager 2>/dev/null || true
     echo ""
     OUTPUT_DIR="${RESULT_DIR}/output"
     if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
