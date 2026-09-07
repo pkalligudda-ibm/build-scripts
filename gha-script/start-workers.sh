@@ -109,7 +109,7 @@ _print_redacted_env "${SYSTEMD_ENV}"
 _reg=""; _tag=""; _icr_key=""
 _couchdb_url=""; _couchdb_user=""; _couchdb_pass=""
 _build_scripts=""
-_cos_wheels_bucket=""; _cos_sbom_bucket=""
+_cos_wheels_bucket=""; _cos_sbom_bucket=""!!
 _cos_api_key=""; _cos_instance_crn=""; _cos_endpoint=""
 if [ -f "${CONFIG_ENV}" ]; then
   # Primary: ICR_* keys (always set in powercore-config.env)
