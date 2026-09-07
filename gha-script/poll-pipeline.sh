@@ -211,16 +211,6 @@ _print_image_pull_info() {
   echo "${image_lines}" | sed 's/^/  /'
 }
 
-# ── _dump_deep_scan_journal ────────────────────────────────────────────────────
-# Prints the complete deep scan worker journal — all lines, no limit.
-_dump_deep_scan_journal() {
-  echo "  ── Deep Scan worker journal (full) ──────────────────────────"
-  sudo -u powercore \
-    XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-    journalctl --user -u "powercore-worker@05-deep-scan.service" \
-      --no-pager 2>/dev/null || true
-}
-
 # ── _print_deep_scan_summary ───────────────────────────────────────────────────
 # Deep Scan writes summaries to deep-scan.log (config.py LOGGING["file"]).
 # Fallback: any *.log in the logs/ directory.
@@ -322,7 +312,8 @@ _print_failure_logs() {
   csv=$(sudo -u powercore find "${result_dir}" \
     -name "results_summary.csv" 2>/dev/null | head -1)
 
-  # Collect failed package names from CSV (status != BUILD_SUCCESS)
+  # Collect failed package names from CSV. BUILD_SUCCESS_UNVERIFIED is also a
+  # successful build, so it must not trigger failure-log output.
   local failed_pkgs=""
   if [ -n "${csv}" ]; then
     failed_pkgs=$(sudo -u powercore awk -F',' '
@@ -337,7 +328,7 @@ _print_failure_logs() {
       NF>1 {
         gsub(/\r/,"")
         s=(si?$si:""); n=(ni?$ni:"?")
-        if (s != "BUILD_SUCCESS" && s != "SATISFIED") print n
+        if (s != "BUILD_SUCCESS" && s != "BUILD_SUCCESS_UNVERIFIED" && s != "SATISFIED") print n
       }
     ' "${csv}" 2>/dev/null || true)
   fi
@@ -400,8 +391,8 @@ _print_failure_logs() {
 
   if [ "${found_failure}" = "true" ]; then
     echo ""
-    echo "  ── Deep Scan worker journal (last 50 lines) ─────────────────"
-    _worker_journal "05-deep-scan" 50
+    echo "  ── Deep Scan worker journal (last 20 lines) ─────────────────"
+    _worker_journal "05-deep-scan" 20
   fi
   echo "  ════════════════════════════════════════════════════════════"
 }
@@ -423,9 +414,9 @@ _print_results_summary_fallback() {
       -path "*/${BREQUEST}/*" -not -path "*/\.*" 2>/dev/null \
       | sort | head -40 | sed "s|.*/${BREQUEST}/||" | sed 's/^/    /'
     echo ""
-    echo "  Deep Scan worker journal (last 50 lines):"
+    echo "  Deep Scan worker journal (last 20 lines):"
     echo "  ----------------------------------------"
-    _worker_journal "05-deep-scan" 50
+    _worker_journal "05-deep-scan" 20
     return
   fi
   sudo -u powercore awk -F',' '
@@ -524,11 +515,6 @@ echo "  Runtime      : ${POWERCORE_RUNTIME}"
 echo "  Poll interval: ${POLL_INTERVAL}s  |  Soft timeout: $((TIMEOUT_SECS/60))min"
 echo "  Deep scan log: ${WFLOG}"
 echo "============================================================"
-
-echo "--- Runtime directory state at startup ---"
-sudo -u powercore find "${POWERCORE_RUNTIME}" -maxdepth 3 -type d 2>/dev/null | sort | head -30 \
-  || echo "  (could not list runtime tree)"
-echo ""
 
 echo "--- Worker status at startup ---"
 for _s in 03-preprocess 04-shallow-scan 05-deep-scan 06-post-process 07-bookkeeping; do
@@ -658,20 +644,14 @@ while true; do
     _print_failure_logs "${RESULT_DIR}"
     echo ""
     echo "  ════════════════════════════════════════════════════════════"
-    echo "  Post-Process Worker Journal"
+    echo "  Post-Process Worker Journal (last 20 lines)"
     echo "  ════════════════════════════════════════════════════════════"
-    sudo -u powercore \
-      XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-      journalctl --user -u "powercore-worker@06-post-process.service" \
-        --no-pager 2>/dev/null || true
+    _worker_journal "06-post-process" 20
     echo ""
     echo "  ════════════════════════════════════════════════════════════"
-    echo "  Bookkeeping Worker Journal"
+    echo "  Bookkeeping Worker Journal (last 20 lines)"
     echo "  ════════════════════════════════════════════════════════════"
-    sudo -u powercore \
-      XDG_RUNTIME_DIR="${XDG_DIR}" DBUS_SESSION_BUS_ADDRESS="${DBUS}" \
-      journalctl --user -u "powercore-worker@07-bookkeeping.service" \
-        --no-pager 2>/dev/null || true
+    _worker_journal "07-bookkeeping" 20
     echo ""
     OUTPUT_DIR="${RESULT_DIR}/output"
     if sudo -u powercore test -d "${OUTPUT_DIR}" 2>/dev/null; then
