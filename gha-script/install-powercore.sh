@@ -81,13 +81,20 @@ sudo -u powercore find "${PC_HOME}" \
   -maxdepth 6 -name "systemd.env" 2>/dev/null | head -5 \
   || echo "WARN: systemd.env not found"
 
-echo "--- systemd.env contents (if found) ---"
+echo "--- systemd.env contents (sensitive values redacted) ---"
 _senv=$(sudo -u powercore find "${PC_HOME}" \
   -maxdepth 6 -name "systemd.env" -path "*/runtime/config/systemd.env" \
   2>/dev/null | head -1 || true)
 if [ -n "${_senv}" ]; then
   echo "  Path: ${_senv}"
-  sudo -u powercore cat "${_senv}" | grep -v '^#\|^$' | head -30 || true
+  sudo -u powercore awk '
+    /^[A-Z_][A-Z0-9_]*=/ {
+      key = substr($0, 1, index($0, "=") - 1)
+      value = substr($0, index($0, "=") + 1)
+      if (key ~ /(API_KEY|PASSWORD|SECRET|TOKEN)/) value = "<redacted>"
+      print key "=" value
+    }
+  ' "${_senv}" | head -30 || true
 else
   echo "  systemd.env not present yet — may be written by deploy-workflow.sh"
 fi
