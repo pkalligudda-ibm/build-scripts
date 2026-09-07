@@ -75,8 +75,20 @@ if [ -z "${POWERCORE_RUNTIME}" ]; then
 fi
 echo "--- POWERCORE_RUNTIME: ${POWERCORE_RUNTIME} ---"
 
-echo "--- Current systemd.env ---"
-sudo -u powercore cat "${SYSTEMD_ENV}" | grep -v '^#\|^$' | head -30 || true
+_print_redacted_env() {
+  local file="$1"
+  sudo -u powercore awk '
+    /^[A-Z_][A-Z0-9_]*=/ {
+      key = substr($0, 1, index($0, "=") - 1)
+      value = substr($0, index($0, "=") + 1)
+      if (key ~ /(API_KEY|PASSWORD|SECRET|TOKEN)/) value = "<redacted>"
+      print key "=" value
+    }
+  ' "${file}" 2>/dev/null || true
+}
+
+echo "--- Current systemd.env (sensitive values redacted) ---"
+_print_redacted_env "${SYSTEMD_ENV}"
 
 # ── Read registry/credentials from powercore-config.env ──────────────────────
 # Config uses ICR_* as primary keys; POWERCORE_* are derived/aliases (same values).
@@ -146,12 +158,12 @@ if [ -f "${CONFIG_ENV}" ]; then
   echo "  POWERCORE_IMAGE_TAG (fb) = ${_pc_tag}"
   echo "  Resolved POWERCORE_REGISTRY       = ${_reg}"
   echo "  Resolved POWERCORE_IMAGE_TAG      = ${_tag}"
-  echo "  ICR_API_KEY                       = ${_icr_key:0:8}***"
+  echo "  ICR_API_KEY configured            = $([ -n "${_icr_key}" ] && echo yes || echo no)"
   echo "  POWERCORE_BUILD_SCRIPTS           = ${_build_scripts}"
   echo "  POWERCORE_COS_WHEELS_BUCKET       = ${_cos_wheels_bucket}"
   echo "  POWERCORE_COS_SBOM_BUCKET         = ${_cos_sbom_bucket}"
-  echo "  COS_API_KEY (resolved)            = ${_cos_api_key:0:8}***"
-  echo "  COS_INSTANCE_CRN                  = ${_cos_instance_crn:0:40}..."
+  echo "  COS_API_KEY configured            = $([ -n "${_cos_api_key}" ] && echo yes || echo no)"
+  echo "  COS_INSTANCE_CRN configured       = $([ -n "${_cos_instance_crn}" ] && echo yes || echo no)"
   echo "  COS_ENDPOINT / POWERCORE_COS_ENDPOINT = ${_cos_endpoint}"
   echo "  COUCHDB_URL                       = ${_couchdb_url}"
   echo "  COUCHDB_USERNAME                  = ${_couchdb_user}"
@@ -191,10 +203,8 @@ if [ -f "${SYSTEMD_ENV}" ]; then
     _set_env_var "${SYSTEMD_ENV}" "COS_ENDPOINT"             "${_cos_endpoint}"
     _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
   fi
-  echo "--- systemd.env after patch ---"
-  sudo -u powercore grep -E \
-    '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^COS_ENDPOINT=|^POWERCORE_COS_ENDPOINT=' \
-    "${SYSTEMD_ENV}" || true
+  echo "--- systemd.env after patch (sensitive values redacted) ---"
+  _print_redacted_env "${SYSTEMD_ENV}"
 fi
 
 # ── Write workflow.env ────────────────────────────────────────────────────────
@@ -221,10 +231,8 @@ if [ -n "${_cos_endpoint}" ]; then
   _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
 fi
 
-echo "--- workflow.env after patch ---"
-sudo -u powercore grep -E \
-  '^POWERCORE_REGISTRY=|^POWERCORE_IMAGE_TAG=|^ICR_API_KEY=|^COUCHDB_URL=|^COUCHDB_USERNAME=|^POWERCORE_FORCE_REBUILD=|^POWERCORE_BUILD_SCRIPTS=|^POWERCORE_COS_WHEELS_BUCKET=|^POWERCORE_COS_SBOM_BUCKET=|^COS_API_KEY=|^COS_INSTANCE_CRN=|^COS_ENDPOINT=|^POWERCORE_COS_ENDPOINT=' \
-  "${WORKFLOW_ENV}" || true
+echo "--- workflow.env after patch (sensitive values redacted) ---"
+_print_redacted_env "${WORKFLOW_ENV}"
 
 # Helper: run a systemctl command as the powercore user
 _sctl() {
@@ -275,31 +283,36 @@ sudo -u powercore grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
 echo "--- ExecStart patched ---"
 
 # ── Show effective environment before starting ────────────────────────────────
-echo "--- Effective worker environment (EnvironmentFile chain) ---"
+echo "--- Effective worker environment (sensitive values redacted) ---"
 echo "  env.sh   (loaded first — provides defaults)"
 echo "  systemd.env (overrides env.sh):"
-sudo -u powercore grep -v '^#\|^$' "${SYSTEMD_ENV}" 2>/dev/null | head -20 | sed 's/^/    /' || true
+_print_redacted_env "${SYSTEMD_ENV}" | sed 's/^/    /'
 echo "  workflow.env (loaded last — wins over systemd.env):"
-sudo -u powercore grep -v '^#\|^$' "${WORKFLOW_ENV}" 2>/dev/null | head -20 | sed 's/^/    /' || true
+_print_redacted_env "${WORKFLOW_ENV}" | sed 's/^/    /'
 
 # ── Show effective merged environment (what workers actually see) ─────────────
 # Merge systemd.env + workflow.env the same way systemd does:
 # later EnvironmentFile= entries win → workflow.env overrides systemd.env.
-echo "--- Effective worker environment ---"
+echo "--- Effective worker environment (sensitive values redacted) ---"
 {
-  sudo -u powercore grep -v '^#\|^$' "${SYSTEMD_ENV}"  2>/dev/null || true
-  sudo -u powercore grep -v '^#\|^$' "${WORKFLOW_ENV}" 2>/dev/null || true
-} | awk -F'=' '
+  sudo -u powercore cat "${SYSTEMD_ENV}" 2>/dev/null || true
+  sudo -u powercore cat "${WORKFLOW_ENV}" 2>/dev/null || true
+} | awk '
   /^[A-Z_][A-Z0-9_]*=/ {
-    key=$1
-    val=substr($0, index($0,"=")+1)
-    seen[key]=val
-    order[++n]=key
+    key = substr($0, 1, index($0, "=") - 1)
+    value = substr($0, index($0, "=") + 1)
+    seen[key] = value
+    order[++n] = key
   }
   END {
-    for (i=1; i<=n; i++) {
-      k=order[i]
-      if (k in seen) { printf "  %-35s = %s\n", k, seen[k]; delete seen[k] }
+    for (i = 1; i <= n; i++) {
+      key = order[i]
+      if (key in seen) {
+        value = seen[key]
+        if (key ~ /(API_KEY|PASSWORD|SECRET|TOKEN)/) value = "<redacted>"
+        printf "  %-35s = %s\n", key, value
+        delete seen[key]
+      }
     }
   }
 ' || true
