@@ -181,3 +181,9 @@ jobs:
             "${{ steps.drop_csv.outputs.powercore_runtime }}" \
             "${{ steps.drop_csv.outputs.csv_name }}" \
             "$PACKAGE_NAME"
+
+      - name: Cleanup — teardown PowerCore and remove downloaded files
+        if: always()
+        run: |
+          chmod +x ./gha-script/cleanup-powercore.sh
+          bash ./gha-script/cleanup-powercore.sh
