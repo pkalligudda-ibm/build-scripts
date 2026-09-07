@@ -58,10 +58,6 @@ if [[ -z "$all_keys" ]]; then
   exit 1
 fi
 
-echo "--- Available wheel keys ---"
-echo "$all_keys" | sed 's/^/  /'
-echo "  (total: $(echo "$all_keys" | wc -l | tr -d ' ') wheels)"
-
 matched_keys=$(echo "$all_keys" | grep -F -- "-${POWERCORE_VERSION}-" || true)
 if [[ -z "$matched_keys" ]]; then
   echo "ERROR: No wheels matching version '${POWERCORE_VERSION}' in COS."
@@ -70,10 +66,8 @@ if [[ -z "$matched_keys" ]]; then
   exit 1
 fi
 
-echo "--- Matched wheels for version ${POWERCORE_VERSION} ---"
+echo "--- Downloading wheels for version ${POWERCORE_VERSION} ---"
 echo "$matched_keys" | sed 's/^/  /'
-
-echo "--- Downloading matched wheels ---"
 mkdir -p powercore-wheels
 while IFS= read -r wheel_key; do
   [[ -z "$wheel_key" ]] && continue
@@ -87,8 +81,7 @@ while IFS= read -r wheel_key; do
   echo "    OK: $(ls -lh "powercore-wheels/$(basename "$wheel_key")" | awk '{print $5}')"
 done <<< "$matched_keys"
 
-echo "--- Downloaded wheels ---"
-ls -lh powercore-wheels/
+echo "--- Wheel download complete ---"
 
 echo "--- Downloading powercore-config.env ---"
 if ! curl -fsS -H "Authorization: bearer $token" \
