@@ -75,21 +75,6 @@ if [ -z "${POWERCORE_RUNTIME}" ]; then
 fi
 echo "--- POWERCORE_RUNTIME: ${POWERCORE_RUNTIME} ---"
 
-_print_redacted_env() {
-  local file="$1"
-  sudo -u powercore awk '
-    /^[A-Z_][A-Z0-9_]*=/ {
-      key = substr($0, 1, index($0, "=") - 1)
-      value = substr($0, index($0, "=") + 1)
-      if (key ~ /(API_KEY|PASSWORD|SECRET|TOKEN)/) value = "<redacted>"
-      print key "=" value
-    }
-  ' "${file}" 2>/dev/null || true
-}
-
-echo "--- Current systemd.env (sensitive values redacted) ---"
-_print_redacted_env "${SYSTEMD_ENV}"
-
 # ── Read registry/credentials from powercore-config.env ──────────────────────
 # Config uses ICR_* as primary keys; POWERCORE_* are derived/aliases (same values).
 # Three problems solved here:
@@ -108,8 +93,8 @@ _print_redacted_env "${SYSTEMD_ENV}"
 # itself using ICR_API_KEY from env — no pre-login needed here.
 _reg=""; _tag=""; _icr_key=""
 _couchdb_url=""; _couchdb_user=""; _couchdb_pass=""
-_build_scripts=""
-_cos_wheels_bucket=""; _cos_sbom_bucket=""!!
+_build_scripts=""; _wheel_version=""
+_cos_wheels_bucket=""; _cos_sbom_bucket=""
 _cos_api_key=""; _cos_instance_crn=""; _cos_endpoint=""
 if [ -f "${CONFIG_ENV}" ]; then
   # Primary: ICR_* keys (always set in powercore-config.env)
@@ -131,6 +116,7 @@ if [ -f "${CONFIG_ENV}" ]; then
   # systemd.env/workflow.env the worker inherits env.sh's default ($WORKSPACE/build-scripts)
   # which is the wrong directory.
   _build_scripts=$(grep -m1 '^POWERCORE_BUILD_SCRIPTS=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
+  _wheel_version=$(grep -m1 '^POWERCORE_WHEEL_VERSION=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   # COS bucket names — Bookkeeping reads these to decide where to upload wheels
   # and SBOMs.  Without patching them in, the worker falls back to hardcoded
   # defaults ('powercore-wheels-staging' / 'powercore-sbom') which may be wrong.
@@ -139,34 +125,14 @@ if [ -f "${CONFIG_ENV}" ]; then
   # COS upload credentials + endpoint — ALL THREE are required by bookkeeping.py
   # before it calls upload_cos_artifacts().  If any is missing the upload is
   # silently skipped with a "⚠ Skipping COS artifact uploads" warning.
-  # bookkeeping.py: cos_api_key = COS_API_KEY, cos_instance_crn = COS_INSTANCE_CRN
-  # bookkeeping.py: cos_endpoint = POWERCORE_COS_ENDPOINT or COS_ENDPOINT (both accepted)
-  # Config sets both to the same value — read COS_ENDPOINT, patch both names into env files.
+  # COS_ENDPOINT is the canonical config value. POWERCORE_COS_ENDPOINT is only
+  # injected into worker environment files for compatibility with older wheels.
   _cos_api_key=$(grep -m1      '^COS_API_KEY='      "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   _cos_instance_crn=$(grep -m1 '^COS_INSTANCE_CRN=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  _cos_endpoint=$(grep -m1     '^COS_ENDPOINT='     "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  # Prefer POWERCORE_COS_ENDPOINT if explicitly set, fall back to COS_ENDPOINT
-  _pcore_cos_endpoint=$(grep -m1 '^POWERCORE_COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
-  [ -n "${_pcore_cos_endpoint}" ] && _cos_endpoint="${_pcore_cos_endpoint}"
+  _cos_endpoint=$(grep -m1 '^COS_ENDPOINT=' "${CONFIG_ENV}" | cut -d= -f2- | tr -d '"' || true)
   # If no dedicated COS API key, fall back to the ICR API key — both are IBM Cloud
   # IAM keys and the same key often has access to both ICR and COS.
   [ -z "${_cos_api_key}" ] && _cos_api_key="${_icr_key}"
-  echo "--- Config from powercore-config.env ---"
-  echo "  ICR_REGISTRY  (primary)  = ${_icr_reg}"
-  echo "  ICR_IMAGE_TAG (primary)  = ${_icr_tag}"
-  echo "  POWERCORE_REGISTRY  (fb) = ${_pc_reg}"
-  echo "  POWERCORE_IMAGE_TAG (fb) = ${_pc_tag}"
-  echo "  Resolved POWERCORE_REGISTRY       = ${_reg}"
-  echo "  Resolved POWERCORE_IMAGE_TAG      = ${_tag}"
-  echo "  ICR_API_KEY configured            = $([ -n "${_icr_key}" ] && echo yes || echo no)"
-  echo "  POWERCORE_BUILD_SCRIPTS           = ${_build_scripts}"
-  echo "  POWERCORE_COS_WHEELS_BUCKET       = ${_cos_wheels_bucket}"
-  echo "  POWERCORE_COS_SBOM_BUCKET         = ${_cos_sbom_bucket}"
-  echo "  COS_API_KEY configured            = $([ -n "${_cos_api_key}" ] && echo yes || echo no)"
-  echo "  COS_INSTANCE_CRN configured       = $([ -n "${_cos_instance_crn}" ] && echo yes || echo no)"
-  echo "  COS_ENDPOINT / POWERCORE_COS_ENDPOINT = ${_cos_endpoint}"
-  echo "  COUCHDB_URL                       = ${_couchdb_url}"
-  echo "  COUCHDB_USERNAME                  = ${_couchdb_user}"
 else
   echo "WARN: powercore-config.env not found at ${CONFIG_ENV} — registry/CouchDB/build-scripts/COS not patched"
 fi
@@ -203,8 +169,6 @@ if [ -f "${SYSTEMD_ENV}" ]; then
     _set_env_var "${SYSTEMD_ENV}" "COS_ENDPOINT"             "${_cos_endpoint}"
     _set_env_var "${SYSTEMD_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
   fi
-  echo "--- systemd.env after patch (sensitive values redacted) ---"
-  _print_redacted_env "${SYSTEMD_ENV}"
 fi
 
 # ── Write workflow.env ────────────────────────────────────────────────────────
@@ -217,6 +181,7 @@ echo "POWERCORE_FORCE_REBUILD=true" | sudo -u powercore tee -a "${WORKFLOW_ENV}"
 # (loaded last in EnvironmentFile= chain → wins over systemd.env)
 [ -n "${_reg}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_REGISTRY"              "${_reg}"
 [ -n "${_tag}"                ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_IMAGE_TAG"             "${_tag}"
+[ -n "${_wheel_version}"      ] && _set_env_var "${WORKFLOW_ENV}" "POWERCORE_WHEEL_VERSION"         "${_wheel_version}"
 [ -n "${_icr_key}"            ] && _set_env_var "${WORKFLOW_ENV}" "ICR_API_KEY"                     "${_icr_key}"
 [ -n "${_couchdb_url}"        ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_URL"                     "${_couchdb_url}"
 [ -n "${_couchdb_user}"       ] && _set_env_var "${WORKFLOW_ENV}" "COUCHDB_USERNAME"                "${_couchdb_user}"
@@ -231,8 +196,28 @@ if [ -n "${_cos_endpoint}" ]; then
   _set_env_var "${WORKFLOW_ENV}" "POWERCORE_COS_ENDPOINT"   "${_cos_endpoint}"
 fi
 
-echo "--- workflow.env after patch (sensitive values redacted) ---"
-_print_redacted_env "${WORKFLOW_ENV}"
+# Read final values with workflow.env taking precedence over systemd.env.
+_get_effective_env_var() {
+  local key="$1"
+  {
+    sudo -u powercore grep -m1 "^${key}=" "${SYSTEMD_ENV}" 2>/dev/null || true
+    sudo -u powercore grep -m1 "^${key}=" "${WORKFLOW_ENV}" 2>/dev/null || true
+  } | tail -1 | cut -d= -f2- | tr -d '"'
+}
+
+_wheel_version=$(_get_effective_env_var "POWERCORE_WHEEL_VERSION")
+[ -n "${_wheel_version}" ] || _wheel_version="not pinned"
+
+echo "--- Worker configuration ---"
+echo "  Image registry: $(_get_effective_env_var "POWERCORE_REGISTRY")"
+echo "  Image tag: $(_get_effective_env_var "POWERCORE_IMAGE_TAG")"
+echo "  Wheel version: ${_wheel_version}"
+echo "  Build scripts: $(_get_effective_env_var "POWERCORE_BUILD_SCRIPTS")"
+echo "  Wheels bucket: $(_get_effective_env_var "POWERCORE_COS_WHEELS_BUCKET")"
+echo "  SBOM bucket: $(_get_effective_env_var "POWERCORE_COS_SBOM_BUCKET")"
+echo "  CouchDB package metadata DB: $(_get_effective_env_var "COUCHDB_DB_PACKAGE_METADATA")"
+echo "  CouchDB build details DB: $(_get_effective_env_var "COUCHDB_DB_BUILD_DETAILS")"
+echo "  CouchDB build artifacts DB: $(_get_effective_env_var "COUCHDB_DB_BUILD_ARTIFACTS")"
 
 # Helper: run a systemctl command as the powercore user
 _sctl() {
@@ -265,57 +250,14 @@ if [ -z "${UNIT_FILE}" ]; then
   sudo -u powercore ls -la "${PC_HOME}/.config/systemd/user/" 2>/dev/null || true
   exit 1
 fi
-echo "--- Unit file: ${UNIT_FILE} ---"
-
 # ── Inject --force-rebuild directly into the 04-shallow-scan unit ────────────
 # The EnvironmentFile approach is unreliable when Restart=always races with
 # the stop/start cycle. Instead, patch ExecStart in the installed service file
 # to pass --force-rebuild directly on the command line — the adapter forwards
 # it via original_argv (shallow_scan.py adapter L59: '--force-rebuild' in argv).
 # This is the most reliable path: no env var timing, no dbus races.
-echo "--- Patching ExecStart in ${UNIT_FILE} ---"
-echo "  Before patch:"
-sudo -u powercore grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
-# Add --force-rebuild to ExecStart if not already present
+# Add --force-rebuild to ExecStart if not already present.
 sudo -u powercore sed -i 's|ExecStart=\(.*powercore-worker\) %i$|ExecStart=\1 %i --force-rebuild|' "${UNIT_FILE}"
-echo "  After patch:"
-sudo -u powercore grep "ExecStart" "${UNIT_FILE}" | sed 's/^/    /'
-echo "--- ExecStart patched ---"
-
-# ── Show effective environment before starting ────────────────────────────────
-echo "--- Effective worker environment (sensitive values redacted) ---"
-echo "  env.sh   (loaded first — provides defaults)"
-echo "  systemd.env (overrides env.sh):"
-_print_redacted_env "${SYSTEMD_ENV}" | sed 's/^/    /'
-echo "  workflow.env (loaded last — wins over systemd.env):"
-_print_redacted_env "${WORKFLOW_ENV}" | sed 's/^/    /'
-
-# ── Show effective merged environment (what workers actually see) ─────────────
-# Merge systemd.env + workflow.env the same way systemd does:
-# later EnvironmentFile= entries win → workflow.env overrides systemd.env.
-echo "--- Effective worker environment (sensitive values redacted) ---"
-{
-  sudo -u powercore cat "${SYSTEMD_ENV}" 2>/dev/null || true
-  sudo -u powercore cat "${WORKFLOW_ENV}" 2>/dev/null || true
-} | awk '
-  /^[A-Z_][A-Z0-9_]*=/ {
-    key = substr($0, 1, index($0, "=") - 1)
-    value = substr($0, index($0, "=") + 1)
-    seen[key] = value
-    order[++n] = key
-  }
-  END {
-    for (i = 1; i <= n; i++) {
-      key = order[i]
-      if (key in seen) {
-        value = seen[key]
-        if (key ~ /(API_KEY|PASSWORD|SECRET|TOKEN)/) value = "<redacted>"
-        printf "  %-35s = %s\n", key, value
-        delete seen[key]
-      }
-    }
-  }
-' || true
 
 # Stop each worker individually (target stop alone races with Restart=always)
 echo "--- Stopping all worker services ---"
@@ -333,9 +275,6 @@ _sctl start powercore-workflow.target || true
 
 echo "--- Waiting 30s for workers to initialise ---"
 sleep 30
-
-echo "--- powercore-workflow.target status ---"
-_sctl status powercore-workflow.target --no-pager || true
 
 echo "--- Per-worker unit status ---"
 ALL_ACTIVE=true
