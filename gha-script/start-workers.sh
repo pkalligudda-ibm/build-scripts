@@ -67,6 +67,32 @@ _sctl() {
     systemctl --user "$@"
 }
 
+# ── Ensure shallow-scan always receives --force-rebuild ───────────────────────
+# Pass the flag directly to the worker so it takes precedence over any
+# POWERCORE_FORCE_REBUILD value loaded from environment files.
+UNIT_FILE=""
+for candidate in \
+  "${PC_HOME}/.config/systemd/user/powercore-worker@.service" \
+  "/etc/systemd/user/powercore-worker@.service" \
+  "/usr/lib/systemd/user/powercore-worker@.service"; do
+  if sudo -u powercore test -f "${candidate}" 2>/dev/null; then
+    UNIT_FILE="${candidate}"
+    break
+  fi
+done
+
+if [ -z "${UNIT_FILE}" ]; then
+  echo "ERROR: powercore-worker@.service not found"
+  exit 1
+fi
+
+if ! sudo -u powercore grep -q -- '--force-rebuild' "${UNIT_FILE}"; then
+  sudo -u powercore sed -i \
+    's|^ExecStart=\(.*powercore-worker.*%i\)$|ExecStart=\1 --force-rebuild|' \
+    "${UNIT_FILE}"
+fi
+_sctl daemon-reload
+
 # ── Check if all workers are already active ──────────────────────────────────
 echo "--- Checking current worker status ---"
 ALL_ALREADY_ACTIVE=true
