@@ -182,8 +182,150 @@ jobs:
             "${{ steps.drop_csv.outputs.csv_name }}" \
             "$PACKAGE_NAME"
 
+      - name: Install V2 scanner dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y file git jq unzip python3.12 python3.12-venv python3-pip build-essential patch wget tar libffi-dev zlib1g-dev libssl-dev libxml2-dev libxslt1-dev libicu-dev pkg-config
+          GRYPE_VERSION=$(curl -s --retry 3 https://api.github.com/repos/anchore/grype/releases/latest | jq -r '.tag_name')
+          wget --tries=3 "https://github.com/anchore/grype/releases/download/${GRYPE_VERSION}/grype_${GRYPE_VERSION#v}_linux_ppc64le.tar.gz"
+          tar -xzf "grype_${GRYPE_VERSION#v}_linux_ppc64le.tar.gz"
+          mkdir -p scan-tools-bin
+          mv grype scan-tools-bin/grype
+          chmod +x scan-tools-bin/grype
+          export GRYPE_BIN="$GITHUB_WORKSPACE/scan-tools-bin/grype"
+          chmod +x ./gha-script/v2-script/scanner-scripts/fetch_scancode_toolkit.sh
+          bash ./gha-script/v2-script/scanner-scripts/fetch_scancode_toolkit.sh
+          tar -xzf scancode-toolkit-src.tar.gz
+
+      - name: Prepare V2 scan workspace
+        run: |
+          chmod +x ./gha-script/v2-script/prepare_scan_workspace.sh
+          bash ./gha-script/v2-script/prepare_scan_workspace.sh \
+            "$POWERCORE_RUNTIME" \
+            "$PACKAGE_NAME" \
+            "$GITHUB_WORKSPACE/v2-scan-workspace"
+
+      - name: Run V2 source scans
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/v2-scan-workspace/package-cache/source" ]; then
+            chmod +x ./gha-script/v2-script/scan_source.sh
+            GRYPE_BIN="$GITHUB_WORKSPACE/scan-tools-bin/grype" \
+              bash ./gha-script/v2-script/scan_source.sh "$GITHUB_WORKSPACE/v2-scan-workspace" "$GITHUB_WORKSPACE"
+          else
+            echo "No source directory was preserved by PowerCore; source scans skipped."
+          fi
+
+      - name: Run V2 wheel scans
+        run: |
+          if find "$GITHUB_WORKSPACE/v2-scan-workspace/wheels" -maxdepth 1 -name '*.whl' -print -quit | grep -q .; then
+            chmod +x ./gha-script/v2-script/scan_wheel.sh
+            GRYPE_BIN="$GITHUB_WORKSPACE/scan-tools-bin/grype" \
+              bash ./gha-script/v2-script/scan_wheel.sh "$GITHUB_WORKSPACE/v2-scan-workspace" "$GITHUB_WORKSPACE"
+          else
+            echo "No wheel was preserved by PowerCore; wheel scans skipped."
+          fi
+
+      # Docker image publishing and image scanning are intentionally disabled for now.
+      - name: Archive V2 scan inputs and scan results
+        run: tar -czf v2-scan-results.tar.gz v2-scan-workspace
+
+      - name: Upload V2 scan inputs and scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-scan-results
+          path: v2-scan-results.tar.gz
+    
       - name: Cleanup — teardown PowerCore and remove downloaded files
         if: always()
         run: |
           chmod +x ./gha-script/v2-script/cleanup-powercore.sh
           bash ./gha-script/v2-script/cleanup-powercore.sh
+
+  v2_license_extraction:
+    needs: build_v2
+    if: ${{ success() }}
+    runs-on: ubuntu-24.04-ppc64le
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan results
+        uses: actions/download-artifact@v4
+        with:
+          name: v2-scan-results
+
+      - name: Extract scan results
+        run: tar -xzf v2-scan-results.tar.gz
+
+      - name: Extract wheel licenses
+        run: |
+          chmod +x ./gha-script/v2-script/extract_wheel_licenses.sh
+          bash ./gha-script/v2-script/extract_wheel_licenses.sh \
+            "$GITHUB_WORKSPACE/v2-scan-workspace" \
+            "$GITHUB_WORKSPACE"
+
+      - name: Archive license results
+        run: tar -czf v2-license-results.tar.gz v2-scan-workspace/wheel
+
+      - name: Upload license results
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-license-results
+          path: v2-license-results.tar.gz
+
+  v2_final_summary:
+    needs: [build_v2, v2_license_extraction]
+    if: ${{ success() }}
+    runs-on: ubuntu-24.04-ppc64le
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download scan results
+        uses: actions/download-artifact@v4
+        with:
+          name: v2-scan-results
+
+      - name: Extract scan results
+        run: tar -xzf v2-scan-results.tar.gz
+
+      - name: Download license results
+        uses: actions/download-artifact@v4
+        with:
+          name: v2-license-results
+
+      - name: Extract license results
+        run: tar -xzf v2-license-results.tar.gz
+
+      - name: Create final V2 scan summary
+        run: |
+          python3 ./gha-script/v2-script/create_scan_summary.py "$GITHUB_WORKSPACE/v2-scan-workspace"
+
+      - name: List all V2 artifact results
+        run: |
+          {
+            echo "## V2 Artifact Results"
+            echo
+            echo "### Artifacts created"
+            echo '- `build-info`'
+            echo '- `v2-scan-results` — wheels, source scans, wheel scans, and metadata'
+            echo '- `v2-license-results` — extracted wheel license results'
+            echo '- `v2-final-summary` — complete result manifest'
+            echo
+            for category in wheels source_scans wheel_scans wheel_licenses metadata; do
+              echo "### ${category//_/ }"
+              jq -r --arg category "$category" '.results[$category][] | "- `" + . + "`"' v2-scan-workspace/final_summary.json
+              echo
+            done
+            echo "### All files"
+            jq -r '.files[] | "- `" + .path + "` (" + (.size_bytes|tostring) + " bytes)"' v2-scan-workspace/final_summary.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive final V2 summary
+        run: tar -czf v2-final-summary.tar.gz v2-scan-workspace/final_summary.json
+
+      - name: Upload final V2 summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-final-summary
+          path: v2-final-summary.tar.gz
