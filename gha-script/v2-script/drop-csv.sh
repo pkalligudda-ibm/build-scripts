@@ -46,8 +46,6 @@ CSV_PATH="${INBOX_DIR}/${CSV_NAME}"
 printf '%s\n' \
   "package_name,package_version,technology,technology_version,ubi_version" \
   "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.12,${UBI_VERSION}" \
-  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.13,${UBI_VERSION}" \
-  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.14,${UBI_VERSION}" \
   | sudo -u powercore tee "${CSV_PATH}" > /dev/null
 
 echo "--- CSV written: ${CSV_PATH} ---"
