@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# drop-csv.sh — Write a single-row CSV for the given package into the
-# 03-preprocess inbox so the PowerCore pipeline picks it up.
+# drop-csv.sh — Write three CSV rows for the given package into the
+# 03-preprocess inbox so PowerCore builds it with Python 3.12, 3.13, and 3.14.
 #
 # Usage:
 #   drop-csv.sh <powercore_runtime> <run_id> \
@@ -45,7 +45,9 @@ CSV_PATH="${INBOX_DIR}/${CSV_NAME}"
 
 printf '%s\n' \
   "package_name,package_version,technology,technology_version,ubi_version" \
-  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},${TECHNOLOGY_VERSION},${UBI_VERSION}" \
+  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.12,${UBI_VERSION}" \
+  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.13,${UBI_VERSION}" \
+  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.14,${UBI_VERSION}" \
   | sudo -u powercore tee "${CSV_PATH}" > /dev/null
 
 echo "--- CSV written: ${CSV_PATH} ---"
