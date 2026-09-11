@@ -42,15 +42,26 @@ def extract_licenses(scancode_output: dict) -> str:
             f"Expected a dict for scancode_output, got {type(scancode_output).__name__}."
         )
 
-    if "license_detections" not in scancode_output:
-        raise ValueError(
-            "Invalid ScanCode JSON: missing required key 'license_detections'."
-        )
-
     licenses: set = set()
 
     try:
-        for detection in scancode_output.get("license_detections", []):
+        def collect_detections(value: object) -> list:
+            if isinstance(value, dict):
+                detections = value.get("license_detections", [])
+                if not isinstance(detections, list):
+                    raise ValueError("'license_detections' must be a list.")
+                result = list(detections)
+                for nested in value.values():
+                    result.extend(collect_detections(nested))
+                return result
+            if isinstance(value, list):
+                result = []
+                for nested in value:
+                    result.extend(collect_detections(nested))
+                return result
+            return []
+
+        for detection in collect_detections(scancode_output):
             if not isinstance(detection, dict):
                 raise ValueError(
                     f"Each license detection must be a dict, got {type(detection).__name__}."

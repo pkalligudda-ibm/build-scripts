@@ -13,6 +13,9 @@ if [ "${#files[@]}" -eq 0 ]; then
 fi
 
 for json_file in "${files[@]}"; do
+  if [[ "$json_file" == *_grype_output.json ]]; then
+    continue
+  fi
   licenses=$(python3 "$REPO_ROOT/gha-script/v2-script/licenses_extract_script.py" "$json_file")
   python3 - "$json_file" "$licenses" <<'PY'
 import json
