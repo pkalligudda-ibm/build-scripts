@@ -182,6 +182,15 @@ jobs:
             "${{ steps.drop_csv.outputs.csv_name }}" \
             "$PACKAGE_NAME"
 
+      - name: Verify V2 wheel was produced
+        run: |
+          if ! find "$POWERCORE_RUNTIME" -type f -name '*.whl' -print -quit | grep -q .; then
+            echo "ERROR: PowerCore completed without producing a wheel file." >&2
+            exit 1
+          fi
+          echo "Wheel file produced:"
+          find "$POWERCORE_RUNTIME" -type f -name '*.whl' -print
+
       - name: Install V2 scanner dependencies
         run: |
           sudo apt update -y
