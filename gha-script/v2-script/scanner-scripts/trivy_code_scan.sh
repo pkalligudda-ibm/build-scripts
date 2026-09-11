@@ -7,7 +7,12 @@ cd package-cache
 if [ "$validate_build_script" == true ]; then
 
     echo "[INFO] Fetching latest Trivy version..."
-    TRIVY_VERSION=$(curl -s https://api.github.com/repos/aquasecurity/trivy/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
+    TRIVY_VERSION=$(curl -fsS --retry 3 https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+      | jq -r '.tag_name // empty')
+    if [ -z "$TRIVY_VERSION" ]; then
+        echo "[ERROR] Unable to determine the latest Trivy version."
+        exit 1
+    fi
     FILE_NAME="trivy_${TRIVY_VERSION#v}_Linux-PPC64LE.tar.gz"
     CHECKSUM_FILE="trivy_${TRIVY_VERSION#v}_checksums.txt"
 
