@@ -53,7 +53,11 @@ if echo "$list_response" | grep -q "<Error>"; then
   exit 1
 fi
 
-POWERCORE_VERSION=$(curl -fsS -H "Authorization: bearer $token" "$CONFIG_URL" | sed -n 's/^POWERCORE_WHEEL_VERSION=//p' | head -1)
+POWERCORE_VERSION=$(curl -fsS -H "Authorization: bearer $token" "$CONFIG_URL" \
+  | sed -n 's/^POWERCORE_WHEEL_VERSION=//p' \
+  | head -1 \
+  | tr -d '"' \
+  | xargs)
 if [ -z "$POWERCORE_VERSION" ]; then
   echo "ERROR: POWERCORE_WHEEL_VERSION is missing from powercore-config.env"
   exit 1
