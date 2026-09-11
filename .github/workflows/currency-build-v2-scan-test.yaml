@@ -231,6 +231,12 @@ jobs:
           fi
 
       # Docker image publishing and image scanning are intentionally disabled for now.
+      - name: Remove scanner installation files
+        run: |
+          rm -rf "$GITHUB_WORKSPACE/v2-scan-workspace/scancode-toolkit"
+          rm -f "$GITHUB_WORKSPACE/v2-scan-workspace/package-cache"/*.tar.gz
+          rm -f "$GITHUB_WORKSPACE/v2-scan-workspace/package-cache"/*checksums.txt
+
       - name: Archive V2 scan inputs and scan results
         run: tar -czf v2-scan-results.tar.gz v2-scan-workspace
 

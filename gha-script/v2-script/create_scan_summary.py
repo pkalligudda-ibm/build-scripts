@@ -22,7 +22,7 @@ summary = {
 }
 
 for path in sorted(root.rglob("*")):
-    if path.is_file():
+    if path.is_file() and ".git" not in path.parts:
         relative_path = str(path.relative_to(root))
         entry = {"path": relative_path, "size_bytes": path.stat().st_size}
         summary["files"].append(entry)
