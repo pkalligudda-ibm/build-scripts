@@ -9,20 +9,32 @@ REQUEST_DIR=$(sudo -u powercore find "$RUNTIME" -type d -name 'BRequest_*' 2>/de
 if [ -z "$REQUEST_DIR" ]; then
   echo "ERROR: no BRequest directory found under $RUNTIME" >&2
   echo "Available runtime directories:" >&2
-  sudo -u powercore find "$RUNTIME" -maxdepth 3 -type d 2>/dev/null | sort >&2 || true
+  sudo find "$RUNTIME" -maxdepth 3 -type d 2>/dev/null | sort >&2 || true
   exit 1
 fi
 
 rm -rf "$WORKSPACE_DIR"
 mkdir -p "$WORKSPACE_DIR/package-cache" "$WORKSPACE_DIR/wheels" "$WORKSPACE_DIR/image" "$WORKSPACE_DIR/metadata"
 
-sudo -u powercore find "$REQUEST_DIR" -type f -name '*.whl' -exec sudo cp -f {} "$WORKSPACE_DIR/wheels/" \;
-sudo -u powercore find "$REQUEST_DIR" -type f -name 'package.json' -exec sudo cp -f {} "$WORKSPACE_DIR/metadata/package.json" \; -quit
-sudo -u powercore find "$REQUEST_DIR" -type f \( -name 'validation_summary.json' -o -name 'artifacts_summary.json' -o -name 'post_process_summary.json' \) -exec sudo cp -f {} "$WORKSPACE_DIR/metadata/" \;
+while IFS= read -r wheel; do
+  [ -z "$wheel" ] && continue
+  sudo cp -f "$wheel" "$WORKSPACE_DIR/wheels/$(basename "$wheel")"
+done < <(sudo find "$REQUEST_DIR" -type f -name '*.whl' 2>/dev/null)
 
-SOURCE_DIR=$(sudo -u powercore find "$REQUEST_DIR" -type d \( -name src -o -name source -o -name "$PACKAGE_NAME" \) 2>/dev/null | head -1 || true)
+PACKAGE_JSON=$(sudo find "$REQUEST_DIR" -type f -name 'package.json' -print -quit 2>/dev/null)
+if [ -n "$PACKAGE_JSON" ]; then
+  sudo cp -f "$PACKAGE_JSON" "$WORKSPACE_DIR/metadata/package.json"
+fi
+
+while IFS= read -r metadata_file; do
+  [ -z "$metadata_file" ] && continue
+  sudo cp -f "$metadata_file" "$WORKSPACE_DIR/metadata/$(basename "$metadata_file")"
+done < <(sudo find "$REQUEST_DIR" -type f \( -name 'validation_summary.json' -o -name 'artifacts_summary.json' -o -name 'post_process_summary.json' \) 2>/dev/null)
+
+SOURCE_DIR=$(sudo find "$REQUEST_DIR" -type d \( -name src -o -name source -o -name "$PACKAGE_NAME" \) 2>/dev/null | head -1 || true)
 if [ -n "$SOURCE_DIR" ]; then
-  sudo cp -a "$SOURCE_DIR" "$WORKSPACE_DIR/package-cache/source"
+  mkdir -p "$WORKSPACE_DIR/package-cache/source"
+  sudo tar -C "$SOURCE_DIR" -cf - . | tar -C "$WORKSPACE_DIR/package-cache/source" -xf -
 else
   echo "WARNING: no source directory found in $REQUEST_DIR" >&2
 fi
@@ -34,11 +46,10 @@ export VALIDATE_BUILD_SCRIPT=true
 export BUILD_DOCKER=true
 EOF
 
-if sudo -u powercore find "$REQUEST_DIR" -type f -name 'image.tar' -print -quit | grep -q .; then
-  sudo -u powercore find "$REQUEST_DIR" -type f -name 'image.tar' -exec sudo cp -f {} "$WORKSPACE_DIR/image/image.tar" \; -quit
+IMAGE_TAR=$(sudo find "$REQUEST_DIR" -type f -name 'image.tar' -print -quit 2>/dev/null)
+if [ -n "$IMAGE_TAR" ]; then
+  sudo cp -f "$IMAGE_TAR" "$WORKSPACE_DIR/image/image.tar"
 fi
-
-sudo chown -R "$(id -u):$(id -g)" "$WORKSPACE_DIR"
 
 printf 'REQUEST_DIR=%s\n' "$REQUEST_DIR" > "$WORKSPACE_DIR/metadata/request.env"
 printf 'PACKAGE_NAME=%s\n' "$PACKAGE_NAME" >> "$WORKSPACE_DIR/metadata/request.env"
