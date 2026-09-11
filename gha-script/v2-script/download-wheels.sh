@@ -64,21 +64,34 @@ if [ -z "$POWERCORE_VERSION" ]; then
 fi
 
 echo "  POWERCORE_WHEEL_VERSION: ${POWERCORE_VERSION}"
-installer_key="${ARCH}/powercore_installer-${POWERCORE_VERSION}-py3-none-any.whl"
 
 listed_keys=$(printf '%s\n' "$list_response" \
   | grep -oE '<Key>[^<]+</Key>' \
   | sed -e 's#<Key>##' -e 's#</Key>##')
 
-if ! printf '%s\n' "$listed_keys" | grep -Fxq "$installer_key"; then
-  echo "ERROR: Installer wheel '${installer_key}' was not found in COS."
-  echo "Available installer keys returned by COS:"
-  printf '%s\n' "$listed_keys" | grep 'powercore_installer' || true
-  exit 1
-fi
+required_wheels=(
+  powercore_installer
+  powercore_config
+  powercore_database
+  powercore_preprocess
+  powercore_shallow_scan
+  powercore_deep_scan
+  powercore_postprocess
+  powercore_bookkeeping
+  powercore_workflow
+)
 
-matched_keys="${installer_key}"
-echo "--- Downloading installer wheel for version ${POWERCORE_VERSION} ---"
+matched_keys=""
+for wheel_name in "${required_wheels[@]}"; do
+  wheel_key="${ARCH}/${wheel_name}-${POWERCORE_VERSION}-py3-none-any.whl"
+  if ! printf '%s\n' "$listed_keys" | grep -Fxq "$wheel_key"; then
+    echo "ERROR: Required PowerCore wheel was not found in COS: ${wheel_key}"
+    exit 1
+  fi
+  matched_keys+="${wheel_key}"$'\n'
+done
+
+echo "--- Downloading required PowerCore wheels for version ${POWERCORE_VERSION} ---"
 mkdir -p powercore-wheels
 while IFS= read -r wheel_key; do
   [[ -z "$wheel_key" ]] && continue
