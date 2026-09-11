@@ -171,7 +171,8 @@ jobs:
             "$PACKAGE_VERSION" \
             "$TECHNOLOGY" \
             "$TECHNOLOGY_VERSION" \
-            "$UBI_VERSION"
+            "$UBI_VERSION" \
+            "$WHEEL_BUILD"
 
       - name: Wait for PowerCore pipeline to complete
         timeout-minutes: 180

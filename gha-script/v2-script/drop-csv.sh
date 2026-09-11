@@ -5,7 +5,7 @@
 # Usage:
 #   drop-csv.sh <powercore_runtime> <run_id> \
 #     <package_name> <package_version> <technology> \
-#     <technology_version> <ubi_version>
+#     <technology_version> <ubi_version> <wheel_build>
 #
 # Outputs (to $GITHUB_OUTPUT):
 #   csv_name           — filename only, e.g. brotlipy-12345678.csv
@@ -19,6 +19,7 @@ PACKAGE_VERSION="${4:?package_version required}"
 TECHNOLOGY="${5:?technology required}"
 TECHNOLOGY_VERSION="${6:-}"
 UBI_VERSION="${7:-ubi9}"
+WHEEL_BUILD="${8:-false}"
 
 echo "--- Package parameters ---"
 echo "  PACKAGE_NAME       = ${PACKAGE_NAME}"
@@ -27,6 +28,7 @@ echo "  TECHNOLOGY         = ${TECHNOLOGY}"
 echo "  TECHNOLOGY_VERSION = ${TECHNOLOGY_VERSION}"
 echo "  UBI_VERSION        = ${UBI_VERSION}"
 echo "  POWERCORE_RUNTIME  = ${POWERCORE_RUNTIME}"
+echo "  WHEEL_BUILD        = ${WHEEL_BUILD}"
 
 INBOX_DIR="${POWERCORE_RUNTIME}/queues/03-preprocess/inbox"
 
@@ -43,10 +45,18 @@ echo "Inbox OK: ${INBOX_DIR}"
 CSV_NAME="${PACKAGE_NAME}-${RUN_ID}.csv"
 CSV_PATH="${INBOX_DIR}/${CSV_NAME}"
 
-printf '%s\n' \
-  "package_name,package_version,technology,technology_version,ubi_version" \
-  "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},3.12,${UBI_VERSION}" \
-  | sudo -u powercore tee "${CSV_PATH}" > /dev/null
+{
+  printf '%s\n' "package_name,package_version,technology,technology_version,ubi_version"
+  if [ "$WHEEL_BUILD" = "true" ]; then
+    for python_version in 3.12 3.13 3.14; do
+      printf '%s\n' \
+        "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},${python_version},${UBI_VERSION}"
+    done
+  else
+    printf '%s\n' \
+      "${PACKAGE_NAME},${PACKAGE_VERSION},${TECHNOLOGY},${TECHNOLOGY_VERSION},${UBI_VERSION}"
+  fi
+} | sudo -u powercore tee "${CSV_PATH}" > /dev/null
 
 echo "--- CSV written: ${CSV_PATH} ---"
 sudo -u powercore cat "${CSV_PATH}"

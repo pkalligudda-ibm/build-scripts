@@ -5,6 +5,10 @@ RUNTIME="${1:?PowerCore runtime required}"
 PACKAGE_NAME="${2:?package name required}"
 WORKSPACE_DIR="${3:-v2-scan-workspace}"
 
+echo "POWERCORE_BUILD_SCRIPTS=${POWERCORE_BUILD_SCRIPTS}"
+
+POWERCORE_BUILD_SCRIPTS="${POWERCORE_BUILD_SCRIPTS:-/home/powercore/build-scripts-v2}"
+
 REQUEST_DIR=$(sudo -u powercore find "$RUNTIME" -type d -name 'BRequest_*' 2>/dev/null | sort | tail -1)
 if [ -z "$REQUEST_DIR" ]; then
   echo "ERROR: no BRequest directory found under $RUNTIME" >&2
@@ -32,11 +36,17 @@ while IFS= read -r metadata_file; do
 done < <(sudo find "$REQUEST_DIR" -type f \( -name 'validation_summary.json' -o -name 'artifacts_summary.json' -o -name 'post_process_summary.json' \) 2>/dev/null)
 
 SOURCE_DIR=$(sudo find "$REQUEST_DIR" -type d \( -name src -o -name source -o -name "$PACKAGE_NAME" \) 2>/dev/null | head -1 || true)
+if [ -z "$SOURCE_DIR" ]; then
+  SOURCE_DIR=$(sudo find "$POWERCORE_BUILD_SCRIPTS" -type d -path "*/${PACKAGE_NAME}" 2>/dev/null | head -1 || true)
+  if [ -n "$SOURCE_DIR" ]; then
+    echo "Using package directory for source scan: $SOURCE_DIR"
+  fi
+fi
 if [ -n "$SOURCE_DIR" ]; then
   mkdir -p "$WORKSPACE_DIR/package-cache/source"
   sudo tar -C "$SOURCE_DIR" -cf - . | tar -C "$WORKSPACE_DIR/package-cache/source" -xf -
 else
-  echo "WARNING: no source directory found in $REQUEST_DIR" >&2
+  echo "WARNING: no source directory found in $REQUEST_DIR or $POWERCORE_BUILD_SCRIPTS" >&2
 fi
 printf 'export CLONED_PACKAGE=source\n' > "$WORKSPACE_DIR/package-cache/scanner-env.sh"
 
