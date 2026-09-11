@@ -392,7 +392,7 @@ _print_failure_logs() {
   if [ "${found_failure}" = "true" ]; then
     echo ""
     echo "  ── Deep Scan worker journal (last 20 lines) ─────────────────"
-    _worker_journal "05-deep-scan" 20
+    _worker_journal "05-deep-scan" 200
   fi
   echo "  ════════════════════════════════════════════════════════════"
 }
@@ -416,7 +416,7 @@ _print_results_summary_fallback() {
     echo ""
     echo "  Deep Scan worker journal (last 20 lines):"
     echo "  ----------------------------------------"
-    _worker_journal "05-deep-scan" 20
+    _worker_journal "05-deep-scan" 200
     return
   fi
   sudo -u powercore awk -F',' '

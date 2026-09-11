@@ -49,6 +49,23 @@ if [ -z "${SYSTEMD_ENV}" ]; then
   exit 1
 fi
 
+# Print the worker environment with secret values redacted.
+echo "--- PowerCore worker environment (values redacted for sensitive variables) ---"
+sudo -u powercore awk '
+  /^[[:space:]]*#/ || !/=/{next}
+  {
+    key = $0
+    sub(/[[:space:]]*=.*/, "", key)
+    value = $0
+    sub(/^[^=]*=[[:space:]]*/, "", value)
+    if (key ~ /(API_KEY|ACCESS_KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL|PRIVATE_KEY)/) {
+      value = "<redacted>"
+    }
+    print key "=" value
+  }
+' "${SYSTEMD_ENV}" || true
+echo "--- End PowerCore worker environment ---"
+
 # Read actual POWERCORE_RUNTIME from systemd.env (the canonical source)
 POWERCORE_RUNTIME=$(sudo -u powercore grep -m1 '^POWERCORE_RUNTIME=' "${SYSTEMD_ENV}" \
   | cut -d= -f2- | tr -d ' "' || true)
