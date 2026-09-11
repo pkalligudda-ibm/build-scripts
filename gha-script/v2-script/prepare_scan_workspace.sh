@@ -4,10 +4,13 @@ set -euo pipefail
 RUNTIME="${1:?PowerCore runtime required}"
 PACKAGE_NAME="${2:?package name required}"
 WORKSPACE_DIR="${3:-v2-scan-workspace}"
-
-echo "POWERCORE_BUILD_SCRIPTS=${POWERCORE_BUILD_SCRIPTS}"
-
 POWERCORE_BUILD_SCRIPTS="${POWERCORE_BUILD_SCRIPTS:-/home/powercore/build-scripts-v2}"
+
+echo "--- V2 scan workspace inputs ---"
+echo "RUNTIME=${RUNTIME}"
+echo "PACKAGE_NAME=${PACKAGE_NAME}"
+echo "WORKSPACE_DIR=${WORKSPACE_DIR}"
+echo "POWERCORE_BUILD_SCRIPTS=${POWERCORE_BUILD_SCRIPTS}"
 
 REQUEST_DIR=$(sudo -u powercore find "$RUNTIME" -type d -name 'BRequest_*' 2>/dev/null | sort | tail -1)
 if [ -z "$REQUEST_DIR" ]; then
@@ -19,6 +22,7 @@ fi
 
 rm -rf "$WORKSPACE_DIR"
 mkdir -p "$WORKSPACE_DIR/package-cache" "$WORKSPACE_DIR/wheels" "$WORKSPACE_DIR/image" "$WORKSPACE_DIR/metadata"
+echo "REQUEST_DIR=${REQUEST_DIR}"
 
 while IFS= read -r wheel; do
   [ -z "$wheel" ] && continue
@@ -62,6 +66,7 @@ if [ -n "$IMAGE_TAR" ]; then
 fi
 
 printf 'REQUEST_DIR=%s\n' "$REQUEST_DIR" > "$WORKSPACE_DIR/metadata/request.env"
+printf 'POWERCORE_BUILD_SCRIPTS=%s\n' "$POWERCORE_BUILD_SCRIPTS" >> "$WORKSPACE_DIR/metadata/request.env"
 printf 'PACKAGE_NAME=%s\n' "$PACKAGE_NAME" >> "$WORKSPACE_DIR/metadata/request.env"
 printf 'SOURCE_PRESENT=%s\n' "$(test -d "$WORKSPACE_DIR/package-cache/source" && echo true || echo false)" >> "$WORKSPACE_DIR/metadata/request.env"
 printf 'WHEEL_PRESENT=%s\n' "$(find "$WORKSPACE_DIR/wheels" -name '*.whl' -print -quit | grep -q . && echo true || echo false)" >> "$WORKSPACE_DIR/metadata/request.env"

@@ -3,7 +3,7 @@
 #
 # Usage:
 #   parse-package-json.sh <package_json> \
-#     <validate_build_script_v2> <wheel_build> <build_docker> <powercore_version>
+#     <validate_build_script_v2> <wheel_build> <build_docker>
 #
 # Output: variable.sh written to CWD
 set -euo pipefail
@@ -12,7 +12,6 @@ PKG_JSON="${1:?package_json argument required}"
 VALIDATE_BUILD_SCRIPT_V2="${2:?validate_build_script_v2 required}"
 WHEEL_BUILD="${3:?wheel_build required}"
 BUILD_DOCKER="${4:?build_docker required}"
-POWERCORE_VERSION="${5:?powercore_version required}"
 
 echo "--- Validating package_json ---"
 if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
@@ -27,6 +26,7 @@ PKG_VER=$(echo  "$PKG_JSON" | jq -r '.package_version // empty')
 TECH=$(echo     "$PKG_JSON" | jq -r '.technology      // empty')
 TECH_VER=$(echo "$PKG_JSON" | jq -r '.technology_version // (.["  technology_version"] // "")' 2>/dev/null || echo "")
 UBI_VER=$(echo  "$PKG_JSON" | jq -r '.ubi_version // ""')
+ARCH=$(echo "$PKG_JSON" | jq -r '.arch // "ppc64le"')
 
 echo "--- Validating required fields ---"
 for field in PKG_NAME PKG_VER TECH; do
@@ -47,13 +47,13 @@ printf '%s\n' \
   "TECHNOLOGY=\"${TECH}\"" \
   "TECHNOLOGY_VERSION=\"${TECH_VER}\"" \
   "UBI_VERSION=\"${UBI_VER}\"" \
+  "ARCH=\"${ARCH}\"" \
   "VALIDATE_BUILD_SCRIPT_V2=\"${VALIDATE_BUILD_SCRIPT_V2}\"" \
   "WHEEL_BUILD=\"${WHEEL_BUILD}\"" \
   "BUILD_DOCKER=\"${BUILD_DOCKER}\"" \
-  "POWERCORE_VERSION=\"${POWERCORE_VERSION}\"" \
   > variable.sh
 
 echo "===== variable.sh ====="
 cat variable.sh
 echo "======================="
-echo "OK: ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) ubi=${UBI_VER}"
+echo "OK: ${PKG_NAME} ${PKG_VER} (${TECH} ${TECH_VER:-default}) arch=${ARCH} ubi=${UBI_VER}"

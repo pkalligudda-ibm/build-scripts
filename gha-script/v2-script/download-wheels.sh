@@ -2,19 +2,21 @@
 # download-wheels.sh — Fetch PowerCore wheels and powercore-config.env from COS.
 #
 # Usage:
-#   download-wheels.sh <api_key> <powercore_version>
+#   download-wheels.sh <api_key> <arch>
 #
 # Output: powercore-wheels/ directory and powercore-config.env in CWD
 set -euo pipefail
 
 API_KEY="${1:?api_key argument required}"
-POWERCORE_VERSION="${2:?powercore_version argument required}"
+ARCH="${2:-ppc64le}"
+CONFIG_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging/powercore-config.env"
 
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
 LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
 
 echo "--- Download config ---"
-echo "  POWERCORE_VERSION : ${POWERCORE_VERSION}"
+echo "  CONFIG_URL        : ${CONFIG_URL}"
+echo "  ARCH              : ${ARCH}"
 echo "  BUCKET_URL        : ${BUCKET_URL}"
 
 echo "--- Fetching IAM token ---"
@@ -35,7 +37,7 @@ if [[ -z "$token" || "$token" == "null" ]]; then
 fi
 echo "OK: IAM token obtained"
 
-echo "--- Listing COS objects (version: ${POWERCORE_VERSION}) ---"
+echo "--- Listing COS objects ---"
 echo "  List URL: ${LIST_URL}"
 
 list_response=$(curl -sS -H "Authorization: bearer $token" "${LIST_URL}")
@@ -51,7 +53,14 @@ if echo "$list_response" | grep -q "<Error>"; then
   exit 1
 fi
 
-installer_key="powercore_installer-${POWERCORE_VERSION}-py3-none-any.whl"
+POWERCORE_VERSION=$(curl -fsS -H "Authorization: bearer $token" "$CONFIG_URL" | sed -n 's/^POWERCORE_WHEEL_VERSION=//p' | head -1)
+if [ -z "$POWERCORE_VERSION" ]; then
+  echo "ERROR: POWERCORE_WHEEL_VERSION is missing from powercore-config.env"
+  exit 1
+fi
+
+echo "  POWERCORE_WHEEL_VERSION: ${POWERCORE_VERSION}"
+installer_key="${ARCH}/powercore_installer-${POWERCORE_VERSION}-py3-none-any.whl"
 if ! printf '%s\n' "$list_response" | tr '<' '\n' | grep -Fx "Key>${installer_key}" > /dev/null; then
   echo "ERROR: Installer wheel '${installer_key}' was not found in COS."
   exit 1

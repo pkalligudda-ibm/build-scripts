@@ -32,10 +32,6 @@ on:
         options:
           - 'false'
           - 'true'
-      powercore_version:
-        description: 'Version of powercore wheels to download from COS (e.g. 1.2.3)'
-        required: true
-        type: string
       large-runner-label:
         description: 'Larger runner to use for resource-heavy builds'
         required: false
@@ -72,8 +68,7 @@ jobs:
             '${{ inputs.package_json }}' \
             '${{ inputs.validate_build_script_v2 }}' \
             '${{ inputs.wheel_build }}' \
-            '${{ inputs.build_docker }}' \
-            '${{ inputs.powercore_version }}'
+            '${{ inputs.build_docker }}'
 
       - name: Upload variable.sh as artifact
         uses: actions/upload-artifact@v4
@@ -122,7 +117,7 @@ jobs:
           chmod +x ./gha-script/v2-script/download-wheels.sh
           bash ./gha-script/v2-script/download-wheels.sh \
             "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "$POWERCORE_VERSION"
+            "$ARCH"
 
       - name: Install IBM Cloud CLI
         run: |
