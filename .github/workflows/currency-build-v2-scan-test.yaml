@@ -1,4 +1,4 @@
-name: Currency Build V2 Test
+name: Currency Build V2 Test Scan
 on:
   workflow_dispatch:
     inputs:
