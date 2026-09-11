@@ -12,7 +12,7 @@ ARCH="${2:-ppc64le}"
 CONFIG_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging/powercore-config.env"
 
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
-LIST_URL="${BUCKET_URL}?list-type=2&prefix=powercore"
+LIST_URL="${BUCKET_URL}?list-type=2&prefix=${ARCH}/"
 
 echo "--- Download config ---"
 echo "  CONFIG_URL        : ${CONFIG_URL}"
@@ -65,8 +65,15 @@ fi
 
 echo "  POWERCORE_WHEEL_VERSION: ${POWERCORE_VERSION}"
 installer_key="${ARCH}/powercore_installer-${POWERCORE_VERSION}-py3-none-any.whl"
-if ! printf '%s\n' "$list_response" | grep -Fq "<Key>${installer_key}</Key>"; then
+
+listed_keys=$(printf '%s\n' "$list_response" \
+  | grep -oE '<Key>[^<]+</Key>' \
+  | sed -e 's#<Key>##' -e 's#</Key>##')
+
+if ! printf '%s\n' "$listed_keys" | grep -Fxq "$installer_key"; then
   echo "ERROR: Installer wheel '${installer_key}' was not found in COS."
+  echo "Available installer keys returned by COS:"
+  printf '%s\n' "$listed_keys" | grep 'powercore_installer' || true
   exit 1
 fi
 
