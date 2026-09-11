@@ -65,7 +65,7 @@ fi
 
 echo "  POWERCORE_WHEEL_VERSION: ${POWERCORE_VERSION}"
 installer_key="${ARCH}/powercore_installer-${POWERCORE_VERSION}-py3-none-any.whl"
-if ! printf '%s\n' "$list_response" | tr '<' '\n' | grep -Fx "Key>${installer_key}" > /dev/null; then
+if ! printf '%s\n' "$list_response" | grep -Fq "<Key>${installer_key}</Key>"; then
   echo "ERROR: Installer wheel '${installer_key}' was not found in COS."
   exit 1
 fi
