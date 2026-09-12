@@ -118,8 +118,7 @@ jobs:
         run: |
           chmod +x ./gha-script/v2-script/download-wheels.sh
           bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "$ARCH"
+            "$GHA_CURRENCY_SERVICE_ID_API_KEY"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -290,8 +289,7 @@ jobs:
         run: |
           chmod +x ./gha-script/v2-script/download-wheels.sh
           bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "$ARCH"
+            "$GHA_CURRENCY_SERVICE_ID_API_KEY"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -462,8 +460,7 @@ jobs:
         run: |
           chmod +x ./gha-script/v2-script/download-wheels.sh
           bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "$ARCH"
+            "$GHA_CURRENCY_SERVICE_ID_API_KEY"
 
       - name: Install IBM Cloud CLI
         run: |

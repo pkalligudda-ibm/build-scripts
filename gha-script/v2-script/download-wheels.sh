@@ -2,21 +2,19 @@
 # download-wheels.sh — Fetch PowerCore wheels and powercore-config.env from COS.
 #
 # Usage:
-#   download-wheels.sh <api_key> <arch>
+#   download-wheels.sh <api_key>
 #
 # Output: powercore-wheels/ directory and powercore-config.env in CWD
 set -euo pipefail
 
 API_KEY="${1:?api_key argument required}"
-ARCH="${2:-ppc64le}"
 CONFIG_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging/powercore-config.env"
 
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
-LIST_URL="${BUCKET_URL}?list-type=2&prefix=${ARCH}/"
+LIST_URL="${BUCKET_URL}?list-type=2"
 
 echo "--- Download config ---"
 echo "  CONFIG_URL        : ${CONFIG_URL}"
-echo "  ARCH              : ${ARCH}"
 echo "  BUCKET_URL        : ${BUCKET_URL}"
 
 echo "--- Fetching IAM token ---"
@@ -83,7 +81,7 @@ required_wheels=(
 
 matched_keys=""
 for wheel_name in "${required_wheels[@]}"; do
-  wheel_key="${ARCH}/${wheel_name}-${POWERCORE_VERSION}-py3-none-any.whl"
+  wheel_key="${wheel_name}-${POWERCORE_VERSION}-py3-none-any.whl"
   if ! printf '%s\n' "$listed_keys" | grep -Fxq "$wheel_key"; then
     echo "ERROR: Required PowerCore wheel was not found in COS: ${wheel_key}"
     exit 1
