@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# collect_scan_results.sh — Download per-Python-version scan result tarballs
-# from the powercore-builds COS bucket and extract them into a single merged
-# v2-scan-workspace, with clear log output for each version.
+# collect_scan_results.sh — Download per-UBI-version × per-Python-version scan
+# result tarballs from the powercore-builds COS bucket and extract them into a
+# single merged v2-scan-workspace, with clear log output for each combination.
 #
 # Usage:
 #   collect_scan_results.sh <package_name> <package_version> <workspace_dir>
@@ -9,11 +9,14 @@
 # Required env vars:
 #   GHA_CURRENCY_SERVICE_ID_API_KEY  — IBM Cloud IAM API key
 #
-# For each Python version (3.12, 3.13, 3.14) it downloads:
-#   powercore-builds/<package_name>/<package_version>/<package_name>-<package_version>-v2-scan-result-<py_ver>.tar.gz
+# For each UBI × Python version combination it tries to download:
+#   powercore-builds/<package_name>/<package_version>/<package_name>-<package_version>-v2-scan-result-<ubi_ver>-<py_ver>.tar.gz
 # and extracts it into <workspace_dir>.
 #
-# Exits 1 if none of the three tarballs were found (nothing to process).
+# A 404 is silently skipped (the corresponding wheel job was skipped or not
+# requested).  Any other HTTP error is fatal.
+#
+# Exits 1 if none of the tarballs were found (nothing to process).
 set -euo pipefail
 
 PACKAGE_NAME="${1:?package_name required}"
@@ -53,60 +56,62 @@ echo "OK: IAM token obtained"
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-builds"
 found_any=false
 
-for PY_VER in 3.12 3.13 3.14; do
-  TARBALL="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${PY_VER}.tar.gz"
-  OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${TARBALL}"
-
-  echo ""
-  echo "------------------------------------------------------------"
-  echo "  Python ${PY_VER}"
-  echo "  Object : ${OBJECT_KEY}"
-  echo "------------------------------------------------------------"
-
-  http_code=$(curl -sS -w "%{http_code}" -o "${TARBALL}" \
-    -H "Authorization: bearer ${TOKEN}" \
-    "${BUCKET_URL}/${OBJECT_KEY}")
-
-  if [[ "${http_code}" == "200" ]]; then
-    echo "  Downloaded OK."
-    tar -xzf "${TARBALL}" --strip-components=1 -C "${WORKSPACE_DIR}"
-    rm -f "${TARBALL}"
-    found_any=true
-    echo "  Extracted successfully."
+for UBI_VER in ubi9 ubi10; do
+  for PY_VER in 3.12 3.13 3.14; do
+    TARBALL="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${UBI_VER}-${PY_VER}.tar.gz"
+    OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${TARBALL}"
 
     echo ""
-    echo "  Wheel scan files:"
-    PY_TAG="cp${PY_VER/./}"
-    wheel_files=$(find "${WORKSPACE_DIR}/wheel" -maxdepth 1 -name "*${PY_TAG}*" 2>/dev/null | sort)
-    if [ -n "${wheel_files}" ]; then
-      while IFS= read -r f; do
-        SIZE=$(du -sh "$f" | cut -f1)
-        printf "    %-8s  %s\n" "${SIZE}" "$(basename "$f")"
-      done <<< "${wheel_files}"
-    else
-      echo "    (none)"
-    fi
+    echo "------------------------------------------------------------"
+    echo "  ${UBI_VER} / Python ${PY_VER}"
+    echo "  Object : ${OBJECT_KEY}"
+    echo "------------------------------------------------------------"
 
-    echo ""
-    echo "  Source scan files:"
-    source_files=$(find "${WORKSPACE_DIR}/source" -maxdepth 1 -type f 2>/dev/null | sort)
-    if [ -n "${source_files}" ]; then
-      while IFS= read -r f; do
-        SIZE=$(du -sh "$f" | cut -f1)
-        printf "    %-8s  %s\n" "${SIZE}" "$(basename "$f")"
-      done <<< "${source_files}"
-    else
-      echo "    (none)"
-    fi
+    http_code=$(curl -sS -w "%{http_code}" -o "${TARBALL}" \
+      -H "Authorization: bearer ${TOKEN}" \
+      "${BUCKET_URL}/${OBJECT_KEY}")
 
-  elif [[ "${http_code}" == "404" ]]; then
-    rm -f "${TARBALL}"
-    echo "  SKIPPED — not found in COS (job may have been skipped or failed)."
-  else
-    rm -f "${TARBALL}"
-    echo "  ERROR: COS GET failed (HTTP ${http_code})."
-    exit 1
-  fi
+    if [[ "${http_code}" == "200" ]]; then
+      echo "  Downloaded OK."
+      tar -xzf "${TARBALL}" --strip-components=1 -C "${WORKSPACE_DIR}"
+      rm -f "${TARBALL}"
+      found_any=true
+      echo "  Extracted successfully."
+
+      echo ""
+      echo "  Wheel scan files:"
+      PY_TAG="cp${PY_VER/./}"
+      wheel_files=$(find "${WORKSPACE_DIR}/wheel" -maxdepth 1 -name "*${PY_TAG}*" 2>/dev/null | sort)
+      if [ -n "${wheel_files}" ]; then
+        while IFS= read -r f; do
+          SIZE=$(du -sh "$f" | cut -f1)
+          printf "    %-8s  %s\n" "${SIZE}" "$(basename "$f")"
+        done <<< "${wheel_files}"
+      else
+        echo "    (none)"
+      fi
+
+      echo ""
+      echo "  Source scan files:"
+      source_files=$(find "${WORKSPACE_DIR}/source" -maxdepth 1 -type f 2>/dev/null | sort)
+      if [ -n "${source_files}" ]; then
+        while IFS= read -r f; do
+          SIZE=$(du -sh "$f" | cut -f1)
+          printf "    %-8s  %s\n" "${SIZE}" "$(basename "$f")"
+        done <<< "${source_files}"
+      else
+        echo "    (none)"
+      fi
+
+    elif [[ "${http_code}" == "404" ]]; then
+      rm -f "${TARBALL}"
+      echo "  SKIPPED — not found in COS (job may have been skipped or not requested)."
+    else
+      rm -f "${TARBALL}"
+      echo "  ERROR: COS GET failed (HTTP ${http_code})."
+      exit 1
+    fi
+  done
 done
 
 echo ""

@@ -7,6 +7,11 @@ Usage:
 
 Writes v2-scan-workspace/final_summary.json and prints a human-readable summary
 to stdout suitable for embedding in the GitHub Actions step summary.
+
+Per-job build statuses are read from env vars:
+    STATUS_UBI9_PY312, STATUS_UBI9_PY313, STATUS_UBI9_PY314
+    STATUS_UBI10_PY312, STATUS_UBI10_PY313, STATUS_UBI10_PY314
+Each may be: success | failure | skipped | cancelled
 """
 import json
 import os
@@ -22,9 +27,28 @@ def sizeof_fmt(num_bytes):
     return f"{num_bytes:.1f} TB"
 
 
+def status_icon(status):
+    return {
+        "success": "✅",
+        "failure": "❌",
+        "skipped": "⊘ skipped",
+        "cancelled": "⊘ cancelled",
+    }.get(status or "skipped", f"⊘ {status}")
+
+
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("v2-scan-workspace")
 package_name = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("PACKAGE_NAME", "unknown")
 package_version = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("PACKAGE_VERSION", "unknown")
+
+# Per-job statuses injected from workflow needs context
+job_statuses = {
+    ("ubi9",  "3.12"): os.environ.get("STATUS_UBI9_PY312",  "skipped"),
+    ("ubi9",  "3.13"): os.environ.get("STATUS_UBI9_PY313",  "skipped"),
+    ("ubi9",  "3.14"): os.environ.get("STATUS_UBI9_PY314",  "skipped"),
+    ("ubi10", "3.12"): os.environ.get("STATUS_UBI10_PY312", "skipped"),
+    ("ubi10", "3.13"): os.environ.get("STATUS_UBI10_PY313", "skipped"),
+    ("ubi10", "3.14"): os.environ.get("STATUS_UBI10_PY314", "skipped"),
+}
 
 summary = {
     "package": package_name,
@@ -34,6 +58,9 @@ summary = {
         "source": root.joinpath("source").is_dir(),
         "wheel": root.joinpath("wheel").is_dir(),
         "image": root.joinpath("image", "results").is_dir(),
+    },
+    "build_statuses": {
+        f"{ubi}-{py}": status for (ubi, py), status in job_statuses.items()
     },
     "results": {
         "wheels": [],
@@ -74,13 +101,21 @@ print(f"  V2 Build Summary")
 print(sep)
 print(f"  Package  : {package_name}")
 print(f"  Version  : {package_version}")
-print(f"  Workspace: {root}")
 print()
 print(f"  Scan types run:")
 print(f"    Source scan : {'YES' if summary['scan_types']['source'] else 'NO'}")
 print(f"    Wheel scan  : {'YES' if summary['scan_types']['wheel'] else 'NO'}")
-#print(f"    Image scan  : {'YES' if summary['scan_types']['image'] else 'NO'}")
 print(sep)
+
+# Per-job build status table
+print()
+print(f"  Wheel Build Status")
+print("-" * 62)
+print(f"  {'UBI':<8}  {'Python':<8}  Status")
+print(f"  {'-'*6}  {'-'*6}  ------")
+for (ubi, py), status in job_statuses.items():
+    icon = status_icon(status)
+    print(f"  {ubi:<8}  {py:<8}  {icon}")
 
 # Wheels built
 print()
@@ -147,9 +182,9 @@ print()
 print(sep)
 print(f"  COS Artifacts (powercore-builds/{package_name}/{package_version}/)")
 print("-" * 62)
-print(f"  {package_name}-{package_version}-v2-scan-result-3.12.tar.gz")
-print(f"  {package_name}-{package_version}-v2-scan-result-3.13.tar.gz")
-print(f"  {package_name}-{package_version}-v2-scan-result-3.14.tar.gz")
+for (ubi, py), status in job_statuses.items():
+    if status == "success":
+        print(f"  {package_name}-{package_version}-v2-scan-result-{ubi}-{py}.tar.gz")
 print(f"  {package_name}-{package_version}-v2-license-results.tar.gz")
 print(f"  {package_name}-{package_version}-v2-final-summary.tar.gz")
 print(sep)
