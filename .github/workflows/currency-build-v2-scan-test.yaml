@@ -77,12 +77,31 @@ jobs:
           path: variable.sh
 
   # ---------------------------------------------------------------------------
+  # Gate jobs — one per UBI group. These are no-ops whose sole purpose is to
+  # give each UBI group a distinct needs chain so GitHub renders them as
+  # separate visual blocks in the workflow graph.
+  # ---------------------------------------------------------------------------
+  build_ubi9:
+    needs: build_info
+    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9'))) }}
+    runs-on: ubuntu-24.04-ppc64le
+    steps:
+      - run: echo "UBI9 build group triggered"
+
+  build_ubi10:
+    needs: build_info
+    if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) }}
+    runs-on: ubuntu-24.04-ppc64le
+    steps:
+      - run: echo "UBI10 build group triggered"
+
+  # ---------------------------------------------------------------------------
   # UBI9 wheel build jobs — one per Python version.
   # Run when wheel_build=true (all versions) OR when ubi9 is the requested
   # UBI and the matching technology_version is selected.
   # ---------------------------------------------------------------------------
   wheel_build_ubi9_py312:
-    needs: build_info
+    needs: build_ubi9
     if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.12') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
@@ -256,7 +275,7 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py313:
-    needs: build_info
+    needs: build_ubi9
     if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.13') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
@@ -430,7 +449,7 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py314:
-    needs: build_info
+    needs: build_ubi9
     if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.14') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
@@ -609,7 +628,7 @@ jobs:
   # UBI and the matching technology_version is selected.
   # ---------------------------------------------------------------------------
   wheel_build_ubi10_py312:
-    needs: build_info
+    needs: build_ubi10
     if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.12') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
@@ -783,7 +802,7 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi10_py313:
-    needs: build_info
+    needs: build_ubi10
     if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.13') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
@@ -957,7 +976,7 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi10_py314:
-    needs: build_info
+    needs: build_ubi10
     if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.14') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
