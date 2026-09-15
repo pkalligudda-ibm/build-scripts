@@ -1192,6 +1192,30 @@ jobs:
             "$GITHUB_WORKSPACE/v2-scan-workspace" \
             "$GITHUB_WORKSPACE"
 
+      - name: Write per-job build statuses for downstream summary
+        env:
+          STATUS_UBI9_PY312: ${{ needs.wheel_build_ubi9_py312.result }}
+          STATUS_UBI9_PY313: ${{ needs.wheel_build_ubi9_py313.result }}
+          STATUS_UBI9_PY314: ${{ needs.wheel_build_ubi9_py314.result }}
+          STATUS_UBI10_PY312: ${{ needs.wheel_build_ubi10_py312.result }}
+          STATUS_UBI10_PY313: ${{ needs.wheel_build_ubi10_py313.result }}
+          STATUS_UBI10_PY314: ${{ needs.wheel_build_ubi10_py314.result }}
+        run: |
+          printf '%s\n' \
+            "STATUS_UBI9_PY312=${STATUS_UBI9_PY312}" \
+            "STATUS_UBI9_PY313=${STATUS_UBI9_PY313}" \
+            "STATUS_UBI9_PY314=${STATUS_UBI9_PY314}" \
+            "STATUS_UBI10_PY312=${STATUS_UBI10_PY312}" \
+            "STATUS_UBI10_PY313=${STATUS_UBI10_PY313}" \
+            "STATUS_UBI10_PY314=${STATUS_UBI10_PY314}" \
+            > build-status.env
+
+      - name: Upload build-status artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-status
+          path: build-status.env
+
       - name: Archive and upload license results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
@@ -1208,19 +1232,17 @@ jobs:
   # the final markdown/JSON summary, uploads it to COS.
   # ---------------------------------------------------------------------------
   v2_final_summary:
-    needs:
-      - v2_license_extraction
-      - wheel_build_ubi9_py312
-      - wheel_build_ubi9_py313
-      - wheel_build_ubi9_py314
-      - wheel_build_ubi10_py312
-      - wheel_build_ubi10_py313
-      - wheel_build_ubi10_py314
+    needs: [v2_license_extraction]
     if: ${{ always() && (needs.v2_license_extraction.result == 'success' || needs.v2_license_extraction.result == 'failure') }}
     runs-on: ubuntu-24.04-ppc64le
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Download build-status artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-status
 
       - name: Collect scan results from COS
         env:
@@ -1251,13 +1273,9 @@ jobs:
         env:
           PACKAGE_NAME: ${{ fromJson(inputs.package_json).package_name }}
           PACKAGE_VERSION: ${{ fromJson(inputs.package_json).package_version }}
-          STATUS_UBI9_PY312: ${{ needs.wheel_build_ubi9_py312.result }}
-          STATUS_UBI9_PY313: ${{ needs.wheel_build_ubi9_py313.result }}
-          STATUS_UBI9_PY314: ${{ needs.wheel_build_ubi9_py314.result }}
-          STATUS_UBI10_PY312: ${{ needs.wheel_build_ubi10_py312.result }}
-          STATUS_UBI10_PY313: ${{ needs.wheel_build_ubi10_py313.result }}
-          STATUS_UBI10_PY314: ${{ needs.wheel_build_ubi10_py314.result }}
         run: |
+          # Load per-job build statuses written by v2_license_extraction
+          set -a; source build-status.env; set +a
           python3 ./gha-script/v2-script/create_scan_summary.py \
             "$GITHUB_WORKSPACE/v2-scan-workspace" \
             "$PACKAGE_NAME" \
