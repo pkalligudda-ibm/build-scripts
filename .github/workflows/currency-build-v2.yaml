@@ -1,4 +1,4 @@
-name: Currency Build V2 Test Scan
+name: Currency Build V2
 on:
   workflow_dispatch:
     inputs:
@@ -37,6 +37,7 @@ on:
         required: false
         type: choice
         options:
+          - ubuntu-24.04-ppc64le-p10
           - ''
           - ubuntu-24.04-ppc64le-2xlarge-p10
           - ubuntu-24.04-ppc64le-4xlarge-p10
@@ -53,7 +54,7 @@ jobs:
   # writes variable.sh — uploaded as an artifact for all downstream jobs.
   # ---------------------------------------------------------------------------
   build_info:
-    runs-on: ubuntu-24.04-ppc64le
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -83,7 +84,7 @@ jobs:
   # ---------------------------------------------------------------------------
   install_scan_tools:
     needs: build_info
-    runs-on: ubuntu-24.04-ppc64le
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -1391,7 +1392,7 @@ jobs:
        needs.wheel_build_ubi10_py312.result == 'success' ||
        needs.wheel_build_ubi10_py313.result == 'success' ||
        needs.wheel_build_ubi10_py314.result == 'success')
-    runs-on: ubuntu-24.04-ppc64le
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -1455,7 +1456,7 @@ jobs:
   v2_final_summary:
     needs: [v2_license_extraction]
     if: ${{ always() && (needs.v2_license_extraction.result == 'success' || needs.v2_license_extraction.result == 'failure') }}
-    runs-on: ubuntu-24.04-ppc64le
+    runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
