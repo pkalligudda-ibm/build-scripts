@@ -107,14 +107,21 @@ if [[ "$ROCM_INSTALL_MODE" == "rpms" ]]; then
     fi
     echo "Installing ROCm from ${ROCM_REPO_URL}"
 
+    ROCM_GPG_URL="https://public.dhe.ibm.com/software/server/POWER/Linux/AMD/RPM-GPG-KEY-PAMD"
+    ROCM_GPG_PATH="/etc/pki/rpm-gpg/RPM-GPG-KEY-PAMD"
+    echo "Importing ROCm GPG key from ${ROCM_GPG_URL}"
+    wget -q -O "${ROCM_GPG_PATH}" "${ROCM_GPG_URL}"
+    rpm --import "${ROCM_GPG_PATH}"
+
     cat > /etc/yum.repos.d/rocm.repo <<EOF
 [ROCm]
 name=ROCm
 baseurl=${ROCM_REPO_URL}
 enabled=1
-gpgcheck=0
+gpgcheck=1
+gpgkey=file://${ROCM_GPG_PATH}
 EOF
-    yum install -y rocm-complete
+    dnf install -y rocm-complete
     ROCM_PATH=/opt/rocm
 fi
 
@@ -261,7 +268,7 @@ echo "Building torchvision wheel"
 export TORCH_CMAKE_PREFIX=$($PYTHON -c 'import torch; print(torch.utils.cmake_prefix_path)')
 export CMAKE_PREFIX_PATH="${TORCH_CMAKE_PREFIX}:${ROCM_PATH}:${CMAKE_PREFIX_PATH:-}"
 
-export BUILD_VERSION="${PACKAGE_VERSION#v}"
+export BUILD_VERSION="${PACKAGE_VERSION#v}+rocm7.14"
 export SETUPTOOLS_SCM_PRETEND_VERSION="${BUILD_VERSION}"
 
 if ! MAX_JOBS=$(nproc) $PYTHON setup.py bdist_wheel --dist-dir "${CURRENT_DIR}"; then
@@ -272,7 +279,7 @@ if ! MAX_JOBS=$(nproc) $PYTHON setup.py bdist_wheel --dist-dir "${CURRENT_DIR}";
 fi
 
 # Install the wheel we just built so the import test can run.
-TORCHVISION_WHL=$(ls "${CURRENT_DIR}"/torchvision-${BUILD_VERSION}-*.whl)
+TORCHVISION_WHL=$(ls "${CURRENT_DIR}"/torchvision-*.whl | grep -v torch- | head -1)
 echo "Built wheel: $(basename $TORCHVISION_WHL)"
 $PYTHON -m pip install "$TORCHVISION_WHL"
 

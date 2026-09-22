@@ -140,14 +140,21 @@ if [[ "$ROCM_INSTALL_MODE" == "rpms" ]]; then
     fi
     echo "Installing ROCm from ${ROCM_REPO_URL}"
 
+    ROCM_GPG_URL="https://public.dhe.ibm.com/software/server/POWER/Linux/AMD/RPM-GPG-KEY-PAMD"
+    ROCM_GPG_PATH="/etc/pki/rpm-gpg/RPM-GPG-KEY-PAMD"
+    echo "Importing ROCm GPG key from ${ROCM_GPG_URL}"
+    wget -q -O "${ROCM_GPG_PATH}" "${ROCM_GPG_URL}"
+    rpm --import "${ROCM_GPG_PATH}"
+
     cat > /etc/yum.repos.d/rocm.repo <<EOF
 [ROCm]
 name=ROCm
 baseurl=${ROCM_REPO_URL}
 enabled=1
-gpgcheck=0
+gpgcheck=1
+gpgkey=file://${ROCM_GPG_PATH}
 EOF
-    yum install -y rocm-complete
+    dnf install -y rocm-complete
     ROCM_PATH=/opt/rocm
 fi
 
@@ -287,7 +294,7 @@ echo "Applied license exclusion patch"
 # ---------------------------------------------------------------------------
 echo "Building torchaudio wheel"
 
-export BUILD_VERSION="${PACKAGE_VERSION#v}"
+export BUILD_VERSION="${PACKAGE_VERSION#v}+rocm7.14"
 export SETUPTOOLS_SCM_PRETEND_VERSION="${BUILD_VERSION}"
 
 # Let torchaudio's CMake find the installed torch
@@ -311,7 +318,7 @@ if ! $PYTHON -m pip wheel . --no-build-isolation --no-deps -w "${SCRIPT_DIR}"; t
     exit 1
 fi
 
-TORCHAUDIO_WHL=$(ls "${SCRIPT_DIR}"/torchaudio-${BUILD_VERSION}-*.whl)
+TORCHAUDIO_WHL=$(ls "${SCRIPT_DIR}"/torchaudio-*.whl | grep -v torch- | head -1)
 echo "Built wheel: $(basename $TORCHAUDIO_WHL)"
 $PYTHON -m pip install "$TORCHAUDIO_WHL"
 
