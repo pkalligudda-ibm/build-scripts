@@ -240,16 +240,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -259,7 +259,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
@@ -448,16 +448,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -467,7 +467,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
@@ -656,16 +656,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -675,7 +675,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
@@ -869,16 +869,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -888,7 +888,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
@@ -1077,16 +1077,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -1096,7 +1096,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
@@ -1285,16 +1285,16 @@ jobs:
           STATUS=$(sudo -u powercore awk -F',' -v pkg="$PKG_NORM" '
             NR==1 {
               for (i=1;i<=NF;i++) {
-                gsub(/\r/,"",\$i); gsub(/^ +| +\$/,"",\$i)
-                if (\$i=="Package" || \$i=="package_name" || \$i=="name") ni=i
-                if (\$i=="Validation Status" || \$i=="status") si=i
+                gsub(/\r/,"",$i); gsub(/^ +| +$/,"",$i)
+                if ($i=="Package" || $i=="package_name" || $i=="name") ni=i
+                if ($i=="Validation Status" || $i=="status") si=i
               }
               next
             }
             NF>1 {
               gsub(/\r/,"")
-              n=(ni?\$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +\$/,"",n)
-              s=(si?\$si:"");  gsub(/^ +| +\$/,"",s)
+              n=(ni?$ni:"?"); gsub(/-/,"_",n); gsub(/^ +| +$/,"",n)
+              s=(si?$si:"");  gsub(/^ +| +$/,"",s)
               if (n==pkg && si) { print s; exit }
             }
           ' "$CSV" 2>/dev/null || true)
@@ -1304,7 +1304,7 @@ jobs:
           else
             echo "ERROR: '${PACKAGE_NAME}' did not build successfully (status=${STATUS:-not found})." >&2
             echo "All package results:"
-            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " \$0 }' "$CSV" || true
+            sudo -u powercore awk -F',' 'NR>1 && NF>1 { gsub(/\r/,""); print "  " $0 }' "$CSV" || true
             exit 1
           fi
 
