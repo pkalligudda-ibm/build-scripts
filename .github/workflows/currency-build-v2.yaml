@@ -179,7 +179,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -399,7 +399,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -619,7 +619,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -839,7 +839,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1059,7 +1059,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1284,7 +1284,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1504,7 +1504,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1724,7 +1724,7 @@ jobs:
           bash ./gha-script/v2-script/generate-powercore-config.sh \
             --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
             --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GITHUB_TOKEN }}"
+            --gh-token "${{ secrets.GH_TOKEN }}"
 
       - name: Install IBM Cloud CLI
         run: |
