@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# download-wheels.sh — Fetch PowerCore wheels and powercore-config.env from COS.
+# download-wheels.sh — Fetch PowerCore wheels from COS.
 #
 # Usage:
-#   download-wheels.sh <api_key>
+#   download-wheels.sh <api_key> <powercore_version>
 #
-# Output: powercore-wheels/ directory and powercore-config.env in CWD
+# Output: powercore-wheels/ directory in CWD
 set -euo pipefail
 
 API_KEY="${1:?api_key argument required}"
-CONFIG_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging/powercore-config.env"
+POWERCORE_VERSION="${2:?powercore_version argument required}"
 
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-wheels-staging"
 LIST_URL="${BUCKET_URL}?list-type=2"
 
 echo "--- Download config ---"
-echo "  CONFIG_URL        : ${CONFIG_URL}"
 echo "  BUCKET_URL        : ${BUCKET_URL}"
+echo "  POWERCORE_VERSION : ${POWERCORE_VERSION}"
 
 echo "--- Fetching IAM token ---"
 token_request=$(curl -sS -X POST https://iam.cloud.ibm.com/identity/token \
@@ -48,16 +48,6 @@ fi
 if echo "$list_response" | grep -q "<Error>"; then
   echo "ERROR: COS list request returned an error response:"
   echo "$list_response"
-  exit 1
-fi
-
-POWERCORE_VERSION=$(curl -fsS -H "Authorization: bearer $token" "$CONFIG_URL" \
-  | sed -n 's/^POWERCORE_WHEEL_VERSION=//p' \
-  | head -1 \
-  | tr -d '"' \
-  | xargs)
-if [ -z "$POWERCORE_VERSION" ]; then
-  echo "ERROR: POWERCORE_WHEEL_VERSION is missing from powercore-config.env"
   exit 1
 fi
 
@@ -104,14 +94,3 @@ while IFS= read -r wheel_key; do
 done <<< "$matched_keys"
 
 echo "--- Wheel download complete ---"
-
-echo "--- Downloading powercore-config.env ---"
-if ! curl -fsS -H "Authorization: bearer $token" \
-  -o "powercore-config.env" \
-  "${BUCKET_URL}/powercore-config.env"; then
-  echo "ERROR: Failed to download powercore-config.env"
-  echo "  Tried: ${BUCKET_URL}/powercore-config.env"
-  exit 1
-fi
-echo "--- powercore-config.env (safe view — key names only) ---"
-grep -E '^[A-Z_]+=' powercore-config.env | sed 's/=.*/=<hidden>/' || true
