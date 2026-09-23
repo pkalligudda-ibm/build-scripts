@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # upload_to_cos.sh — Upload a file to the powercore-builds COS bucket under
-# <PACKAGE_NAME>/<PACKAGE_VERSION>/<filename>.
+# <PACKAGE_NAME>/<PACKAGE_VERSION>/<GHA_RUN_ID>/<filename>.
 #
 # Usage:
 #   upload_to_cos.sh <file>
@@ -9,9 +9,11 @@
 #   GHA_CURRENCY_SERVICE_ID_API_KEY  — IBM Cloud IAM API key
 #   PACKAGE_NAME                     — package name (path prefix in bucket)
 #   PACKAGE_VERSION                  — package version (path prefix in bucket)
+#   GHA_RUN_ID                       — GitHub Actions run ID (isolates this run's
+#                                      uploads from other runs of the same package/version)
 #
 # The object key in COS will be:
-#   <PACKAGE_NAME>/<PACKAGE_VERSION>/<basename of file>
+#   <PACKAGE_NAME>/<PACKAGE_VERSION>/<GHA_RUN_ID>/<basename of file>
 set -euo pipefail
 
 FILE="${1:?file argument required}"
@@ -19,10 +21,11 @@ FILE="${1:?file argument required}"
 : "${GHA_CURRENCY_SERVICE_ID_API_KEY:?GHA_CURRENCY_SERVICE_ID_API_KEY is required}"
 : "${PACKAGE_NAME:?PACKAGE_NAME is required}"
 : "${PACKAGE_VERSION:?PACKAGE_VERSION is required}"
+: "${GHA_RUN_ID:?GHA_RUN_ID is required}"
 
 BUCKET="powercore-builds"
 BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/${BUCKET}"
-OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/$(basename "${FILE}")"
+OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${GHA_RUN_ID}/$(basename "${FILE}")"
 
 echo "--- Uploading to COS ---"
 echo "  File       : ${FILE}"

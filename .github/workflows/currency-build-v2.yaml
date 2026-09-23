@@ -315,6 +315,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -523,6 +524,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -731,6 +733,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -944,6 +947,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -1152,6 +1156,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -1360,6 +1365,7 @@ jobs:
       - name: Archive and upload V2 scan results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
         run: |
           ARTIFACT_NAME="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${{ env.UBI_VERSION }}-${{ env.PYTHON_VERSION }}"
           tar -czf "${ARTIFACT_NAME}.tar.gz" v2-scan-workspace
@@ -1406,7 +1412,8 @@ jobs:
           bash ./gha-script/v2-script/collect_scan_results.sh \
             "${{ fromJson(inputs.package_json).package_name }}" \
             "${{ fromJson(inputs.package_json).package_version }}" \
-            "$GITHUB_WORKSPACE/v2-scan-workspace"
+            "$GITHUB_WORKSPACE/v2-scan-workspace" \
+            "${{ github.run_id }}"
 
       - name: Extract wheel licenses
         run: |
@@ -1442,6 +1449,7 @@ jobs:
       - name: Archive and upload license results to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
           PACKAGE_NAME: ${{ fromJson(inputs.package_json).package_name }}
           PACKAGE_VERSION: ${{ fromJson(inputs.package_json).package_version }}
         run: |
@@ -1507,6 +1515,7 @@ jobs:
       - name: Archive and upload final V2 summary to COS
         env:
           GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          GHA_RUN_ID: ${{ github.run_id }}
           PACKAGE_NAME: ${{ fromJson(inputs.package_json).package_name }}
           PACKAGE_VERSION: ${{ fromJson(inputs.package_json).package_version }}
         run: |

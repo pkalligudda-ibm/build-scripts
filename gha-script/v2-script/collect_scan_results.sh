@@ -4,14 +4,18 @@
 # single merged v2-scan-workspace, with clear log output for each combination.
 #
 # Usage:
-#   collect_scan_results.sh <package_name> <package_version> <workspace_dir>
+#   collect_scan_results.sh <package_name> <package_version> <workspace_dir> <run_id>
 #
 # Required env vars:
 #   GHA_CURRENCY_SERVICE_ID_API_KEY  — IBM Cloud IAM API key
 #
 # For each UBI × Python version combination it tries to download:
-#   powercore-builds/<package_name>/<package_version>/<package_name>-<package_version>-v2-scan-result-<ubi_ver>-<py_ver>.tar.gz
+#   powercore-builds/<package_name>/<package_version>/<run_id>/<package_name>-<package_version>-v2-scan-result-<ubi_ver>-<py_ver>.tar.gz
 # and extracts it into <workspace_dir>.
+#
+# The <run_id> argument (GitHub Actions run ID) ensures only tarballs uploaded
+# by this specific workflow run are collected, preventing cross-run contamination
+# when the same package/version has been built in multiple runs.
 #
 # A 404 is silently skipped (the corresponding wheel job was skipped or not
 # requested).  Any other HTTP error is fatal.
@@ -22,6 +26,7 @@ set -euo pipefail
 PACKAGE_NAME="${1:?package_name required}"
 PACKAGE_VERSION="${2:?package_version required}"
 WORKSPACE_DIR="${3:-v2-scan-workspace}"
+RUN_ID="${4:?run_id required}"
 
 : "${GHA_CURRENCY_SERVICE_ID_API_KEY:?GHA_CURRENCY_SERVICE_ID_API_KEY is required}"
 
@@ -59,7 +64,7 @@ found_any=false
 for UBI_VER in ubi9 ubi10; do
   for PY_VER in 3.12 3.13 3.14; do
     TARBALL="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${UBI_VER}-${PY_VER}.tar.gz"
-    OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${TARBALL}"
+    OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${RUN_ID}/${TARBALL}"
 
     echo ""
     echo "------------------------------------------------------------"
