@@ -32,6 +32,10 @@ on:
         options:
           - 'false'
           - 'true'
+      unique_id:
+        description: 'Unique ID for the build'
+        required: false
+        default: 'None'
       large-runner-label:
         description: 'Larger runner to use for resource-heavy builds'
         required: false
@@ -45,8 +49,8 @@ on:
 
 run-name: >
   ${{ inputs.large-runner-label != '' &&
-      format('Retriggered Currency Build V2 for {0} on {1}', fromJson(inputs.package_json).package_name, inputs.large-runner-label) ||
-      format('Currency Build V2 — {0} {1}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version)
+      format('Retriggered Currency Build V2 for {0} and Unique ID {1} on {2}', fromJson(inputs.package_json).package_name, inputs.unique_id, inputs.large-runner-label) ||
+      format('Currency Build V2 — {0} {1} && Unique ID {2}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version, inputs.unique_id)
   }}
 
 jobs:
