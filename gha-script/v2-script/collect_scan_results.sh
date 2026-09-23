@@ -62,7 +62,12 @@ BUCKET_URL="https://s3.us.cloud-object-storage.appdomain.cloud/powercore-builds"
 found_any=false
 
 for UBI_VER in ubi9 ubi10; do
-  for PY_VER in 3.12 3.13 3.14; do
+  if [[ "${UBI_VER}" == "ubi9" ]]; then
+    PY_VERS="3.10 3.11 3.12 3.13 3.14"
+  else
+    PY_VERS="3.12 3.13 3.14"
+  fi
+  for PY_VER in ${PY_VERS}; do
     TARBALL="${PACKAGE_NAME}-${PACKAGE_VERSION}-v2-scan-result-${UBI_VER}-${PY_VER}.tar.gz"
     OBJECT_KEY="${PACKAGE_NAME}/${PACKAGE_VERSION}/${RUN_ID}/${TARBALL}"
 
