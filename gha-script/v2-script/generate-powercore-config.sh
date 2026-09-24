@@ -19,9 +19,9 @@
 set -euo pipefail
 
 # ── Secrets Manager configuration ────────────────────────────────────────────
-SM_INSTANCE_ID="e04a4ffa-e1fc-419f-85ec-5dcb512d2d1c"
+SM_INSTANCE_ID="${SM_INSTANCE_ID:?SM_INSTANCE_ID environment variable is required}"
+SM_SECRET_ID="${SM_SECRET_ID:?SM_SECRET_ID environment variable is required}"
 SM_REGION="us-east"
-SM_SECRET_ID="7384e6e0-3ce1-aaca-e68a-bbfe5e2cf010"   # powercore-config-secrets-staging
 
 # ── Defaults from environment ─────────────────────────────────────────────────
 API_KEY="${IBMCLOUD_API_KEY:-${IAM_API_KEY:-${GHA_CURRENCY_SERVICE_ID_API_KEY:-}}}"

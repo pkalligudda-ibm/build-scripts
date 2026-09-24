@@ -8,7 +8,7 @@ on:
           {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":"ubi9"}
         required: true
         type: string
-      validate_build_script_v2:
+      v2-enabled:
         description: 'Run v2 build script via powercore'
         required: true
         default: 'false'
@@ -16,7 +16,7 @@ on:
         options:
           - 'false'
           - 'true'
-      wheel_build:
+      trigger_all_python_builds:
         description: 'Create wheel for all Python versions and UBI versions via powercore'
         required: true
         default: 'false'
@@ -76,8 +76,8 @@ jobs:
           chmod +x ./gha-script/v2-script/parse-package-json.sh
           bash ./gha-script/v2-script/parse-package-json.sh \
             '${{ inputs.package_json }}' \
-            '${{ inputs.validate_build_script_v2 }}' \
-            '${{ inputs.wheel_build }}' \
+            '${{ inputs.v2-enabled }}' \
+            '${{ inputs.trigger_all_python_builds }}' \
             '${{ inputs.build_docker }}'
 
       - name: Upload variable.sh as artifact
@@ -87,11 +87,11 @@ jobs:
           path: variable.sh
 
   # ---------------------------------------------------------------------------
-  # install_scan_tools: Downloads grype and scancode-toolkit once and uploads
-  # them as a GHA artifact. All 6 wheel jobs reuse this instead of
-  # re-downloading on every runner.
+  # prepare_shared_artifacts: Downloads grype, scancode-toolkit, and PowerCore
+  # wheels from COS, and generates powercore-config.env from Secrets Manager.
+  # All wheel-build jobs reuse these artifacts instead of repeating the work.
   # ---------------------------------------------------------------------------
-  install_scan_tools:
+  prepare_shared_artifacts:
     needs: build_info
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     steps:
@@ -99,7 +99,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install jq and wget
-        run: sudo apt update -y && sudo apt install -y jq wget
+        run: sudo apt update -y && sudo apt install -y jq wget curl
 
       - name: Download grype
         run: |
@@ -115,6 +115,27 @@ jobs:
           chmod +x ./gha-script/v2-script/scanner-scripts/fetch_scancode_toolkit.sh
           bash ./gha-script/v2-script/scanner-scripts/fetch_scancode_toolkit.sh
 
+      - name: Download PowerCore wheels from COS
+        env:
+          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+        run: |
+          chmod +x ./gha-script/v2-script/download-wheels.sh
+          bash ./gha-script/v2-script/download-wheels.sh \
+            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
+            "${{ inputs.powercore_version }}"
+
+      - name: Generate powercore-config.env from Secrets Manager
+        env:
+          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
+          SM_INSTANCE_ID: ${{ secrets.SM_INSTANCE_ID }}
+          SM_SECRET_ID: ${{ secrets.SM_SECRET_ID }}
+        run: |
+          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
+          bash ./gha-script/v2-script/generate-powercore-config.sh \
+            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
+            --version  "${{ inputs.powercore_version }}" \
+            --gh-token "${{ secrets.GH_TOKEN }}"
+
       - name: Upload scan-tools artifact
         uses: actions/upload-artifact@v4
         with:
@@ -123,14 +144,26 @@ jobs:
             scan-tools-bin/
             scancode-toolkit-src.tar.gz
 
+      - name: Upload powercore-wheels artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
+
+      - name: Upload powercore-config artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: powercore-config
+          path: powercore-config.env
+
   # ---------------------------------------------------------------------------
   # Wheel build jobs — 5 for ubi9 (py310/311/312/313/314), 3 for ubi10
   # (py312/313/314), all parallel. UBI version is hardcoded per job; if
   # conditions gate which jobs run.
   # ---------------------------------------------------------------------------
   wheel_build_ubi9_py310:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.10') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.10') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.10"
@@ -162,24 +195,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -349,8 +375,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py311:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.11') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.11') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.11"
@@ -382,24 +408,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -569,8 +588,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py312:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.12') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.12') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.12"
@@ -602,24 +621,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -789,8 +801,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py313:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.13') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.13') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.13"
@@ -822,24 +834,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1009,8 +1014,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi9_py314:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.14') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.14') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.14"
@@ -1042,24 +1047,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1230,12 +1228,12 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # UBI10 wheel build jobs — one per Python version.
-  # Run when wheel_build=true (all versions) OR when ubi10 is the requested
+  # Run when trigger_all_python_builds=true (all versions) OR when ubi10 is the requested
   # UBI and the matching technology_version is selected.
   # ---------------------------------------------------------------------------
   wheel_build_ubi10_py312:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.12') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.12') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.12"
@@ -1267,24 +1265,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1454,8 +1445,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi10_py313:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.13') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.13') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.13"
@@ -1487,24 +1478,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
@@ -1674,8 +1658,8 @@ jobs:
           bash ./gha-script/v2-script/cleanup-powercore.sh
 
   wheel_build_ubi10_py314:
-    needs: install_scan_tools
-    if: ${{ (inputs.wheel_build == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.wheel_build == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.14') }}
+    needs: prepare_shared_artifacts
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.14') }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.14"
@@ -1707,24 +1691,17 @@ jobs:
       - name: Install system dependencies
         run: sudo apt update -y && sudo apt install -y wget curl tar jq git
 
-      - name: Download PowerCore wheels from COS
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/download-wheels.sh
-          bash ./gha-script/v2-script/download-wheels.sh \
-            "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            "${{ inputs.powercore_version }}"
+      - name: Download powercore-wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-wheels
+          path: powercore-wheels/
 
-      - name: Generate powercore-config.env from Secrets Manager
-        env:
-          GHA_CURRENCY_SERVICE_ID_API_KEY: ${{ secrets.GHA_CURRENCY_SERVICE_ID_API_KEY }}
-        run: |
-          chmod +x ./gha-script/v2-script/generate-powercore-config.sh
-          bash ./gha-script/v2-script/generate-powercore-config.sh \
-            --api-key  "$GHA_CURRENCY_SERVICE_ID_API_KEY" \
-            --version  "${{ inputs.powercore_version }}" \
-            --gh-token "${{ secrets.GH_TOKEN }}"
+      - name: Download powercore-config artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: powercore-config
+          path: .
 
       - name: Install IBM Cloud CLI
         run: |
