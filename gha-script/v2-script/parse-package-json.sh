@@ -3,7 +3,7 @@
 #
 # Usage:
 #   parse-package-json.sh <package_json> \
-#     <v2-enabled> <trigger_all_python_builds> <build_docker>
+#     <v2_enabled> <trigger_all_python_builds> <build_docker>
 #
 # Output: variable.sh written to CWD
 set -euo pipefail
