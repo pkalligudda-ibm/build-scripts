@@ -8,7 +8,7 @@ on:
           {"package_name":"brotlipy","package_version":"v0.8.0","technology":"python","technology_version":"3.12","ubi_version":"ubi9"}
         required: true
         type: string
-      v2-enabled:
+      v2_enabled:
         description: 'Run v2 build script via powercore'
         required: true
         default: 'false'
