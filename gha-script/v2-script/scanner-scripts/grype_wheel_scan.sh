@@ -1,6 +1,5 @@
 #!/bin/bash -e
 
-validate_build_script=$VALIDATE_BUILD_SCRIPT
 cloned_package=$CLONED_PACKAGE
 
 # Use pre-installed grype from the cached artifact

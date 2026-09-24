@@ -9,9 +9,9 @@
 set -euo pipefail
 
 PKG_JSON="${1:?package_json argument required}"
-V2_ENABLED="${2:?v2_enabled argument required}"
-TRIGGER_ALL_PYTHON_BUILDS="${3:?trigger_all_python_builds required}"
-BUILD_DOCKER="${4:?build_docker required}"
+V2_ENABLED="${2:-true}"
+TRIGGER_ALL_PYTHON_BUILDS="${3:-false}"
+BUILD_DOCKER="${4:-false}"
 
 echo "--- Validating package_json ---"
 if ! echo "$PKG_JSON" | jq empty 2>/dev/null; then
