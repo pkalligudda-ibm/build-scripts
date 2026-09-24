@@ -9,7 +9,7 @@
 set -euo pipefail
 
 PKG_JSON="${1:?package_json argument required}"
-V2_ENABLED="${2:?v2-enabled required}"
+V2_ENABLED="${2:?v2_enabled argument required}"
 TRIGGER_ALL_PYTHON_BUILDS="${3:?trigger_all_python_builds required}"
 BUILD_DOCKER="${4:?build_docker required}"
 
