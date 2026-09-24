@@ -160,7 +160,7 @@ jobs:
   # ---------------------------------------------------------------------------
   wheel_build_ubi9_py310:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.10') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && contains(fromJson(inputs.package_json).technology_version, '3.10')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.10"
@@ -373,7 +373,7 @@ jobs:
 
   wheel_build_ubi9_py311:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.11') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && contains(fromJson(inputs.package_json).technology_version, '3.11')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.11"
@@ -586,7 +586,7 @@ jobs:
 
   wheel_build_ubi9_py312:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.12') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && contains(fromJson(inputs.package_json).technology_version, '3.12')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.12"
@@ -799,7 +799,7 @@ jobs:
 
   wheel_build_ubi9_py313:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.13') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && contains(fromJson(inputs.package_json).technology_version, '3.13')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.13"
@@ -1012,7 +1012,7 @@ jobs:
 
   wheel_build_ubi9_py314:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && fromJson(inputs.package_json).technology_version == '3.14') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && !contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && (fromJson(inputs.package_json).ubi_version == '' || contains(fromJson(inputs.package_json).ubi_version, 'ubi9')) && contains(fromJson(inputs.package_json).technology_version, '3.14')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.14"
@@ -1230,7 +1230,7 @@ jobs:
   # ---------------------------------------------------------------------------
   wheel_build_ubi10_py312:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.12') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && contains(fromJson(inputs.package_json).technology_version, '3.12')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.12"
@@ -1443,7 +1443,7 @@ jobs:
 
   wheel_build_ubi10_py313:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.13') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && contains(fromJson(inputs.package_json).technology_version, '3.13')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.13"
@@ -1656,7 +1656,7 @@ jobs:
 
   wheel_build_ubi10_py314:
     needs: prepare_shared_artifacts
-    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && fromJson(inputs.package_json).technology_version == '3.14') }}
+    if: ${{ (inputs.trigger_all_python_builds == 'true' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10')) || (inputs.trigger_all_python_builds == 'false' && contains(fromJson(inputs.package_json).ubi_version, 'ubi10') && contains(fromJson(inputs.package_json).technology_version, '3.14')) }}
     runs-on: ${{ inputs.large-runner-label != '' && inputs.large-runner-label || 'ubuntu-24.04-ppc64le' }}
     env:
       PYTHON_VERSION: "3.14"
