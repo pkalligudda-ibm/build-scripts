@@ -52,9 +52,7 @@ on:
           - ubuntu-24.04-ppc64le-4xlarge-p10
 
 run-name: >
-  ${{ inputs.large-runner-label != '' &&
-      format('Currency Build V2 — {0} {1} && Unique ID {2}', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version, inputs.unique_id)
-  }}
+  ${{ format('Currency Build V2 — {0} {1} (ID: {2})', fromJson(inputs.package_json).package_name, fromJson(inputs.package_json).package_version, inputs.unique_id) }}
 
 jobs:
   # ---------------------------------------------------------------------------
